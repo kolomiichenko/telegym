@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          # Project is a Go workspace with two modules (root + pkg/xk6).
+          # Listing both go.sum files keeps the build cache key stable
+          # across them; without this setup-go only sees the root go.sum
+          # and emits "Cache service responded with 400" on multi-module
+          # restores.
+          cache-dependency-path: |
+            go.sum
+            pkg/xk6/go.sum
+
+      - name: gofmt
+        run: test -z "$(gofmt -l -s . | tee /dev/stderr)"
+
+      - name: go vet (root module)
+        run: go vet ./...
+
+      - name: go vet (pkg/xk6)
+        working-directory: pkg/xk6
+        run: go vet ./...
+
+      - name: golangci-lint (root module)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --timeout=5m
+
+      - name: golangci-lint (pkg/xk6)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --timeout=5m
+          working-directory: pkg/xk6
+
+      - name: actionlint
+        uses: raven-actions/actionlint@v2
+
+      - name: govulncheck (root module)
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: '1.26'
+          check-latest: true
+
+      - name: govulncheck (pkg/xk6)
+        uses: golang/govulncheck-action@v1
+        with:
+          go-version-input: '1.26'
+          check-latest: true
+          work-dir: pkg/xk6
+
+      - name: trivy fs
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          skip-dirs: bin,.git
+
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          # Project is a Go workspace with two modules (root + pkg/xk6).
+          # Listing both go.sum files keeps the build cache key stable
+          # across them; without this setup-go only sees the root go.sum
+          # and emits "Cache service responded with 400" on multi-module
+          # restores.
+          cache-dependency-path: |
+            go.sum
+            pkg/xk6/go.sum
+
+      - name: Run tests (root module)
+        run: go test -race -timeout 5m ./...
+
+      - name: Run tests (pkg/xk6)
+        working-directory: pkg/xk6
+        run: go test -race -timeout 5m ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+          # Project is a Go workspace with two modules (root + pkg/xk6).
+          # Listing both go.sum files keeps the build cache key stable
+          # across them; without this setup-go only sees the root go.sum
+          # and emits "Cache service responded with 400" on multi-module
+          # restores.
+          cache-dependency-path: |
+            go.sum
+            pkg/xk6/go.sum
+
+      - name: Build all binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p bin
+          go build -o bin/ ./cmd/...

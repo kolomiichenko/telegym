@@ -1,0 +1,26 @@
+# Configures GitHub's automatic release notes generator.
+# Triggered from the "Releases -> Generate release notes" button or via the
+# REST API when cutting a tag; categorises merged PRs by label so the
+# release page reads like a real changelog without any local file.
+#
+# Reference: https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+      - dependencies
+  categories:
+    - title: Features
+      labels: [enhancement, feat, feature]
+    - title: Fixes
+      labels: [bug, fix, bugfix]
+    - title: Performance
+      labels: [perf, performance]
+    - title: Refactor
+      labels: [refactor, cleanup]
+    - title: Documentation
+      labels: [docs, documentation]
+    - title: CI / Tooling
+      labels: [ci, build, chore, tooling]
+    - title: Other Changes
+      labels: ["*"]

@@ -1,0 +1,44 @@
+# golangci-lint configuration for telegym.
+# Run locally:  golangci-lint run ./...
+# Run in CI:    same command, via .github/workflows/ci.yml.
+
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  go: "1.26"
+
+linters:
+  default: none
+  enable:
+    - errcheck       # unchecked errors
+    - govet          # standard go vet
+    - ineffassign    # ineffective assignments
+    - misspell       # common misspellings
+    - revive         # replacement for golint
+    - staticcheck    # static analysis (also covers gosimple)
+    - unused         # unused code
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          disabled: true   # comments-on-exported-only-when-non-obvious
+    misspell:
+      locale: US
+
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck     # tests are allowed to ignore errors for brevity
+    paths:
+      - bin
+      - data
+      - docker/grafana
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -1,0 +1,208 @@
+{
+  "uid": "telegym-main",
+  "title": "telegym — k6 + mock",
+  "tags": ["telegym", "k6", "telegram"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "k6 — load generator",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 2,
+      "title": "Virtual users (vus / vus_max)",
+      "gridPos": { "x": 0, "y": 1, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "k6_vus", "legendFormat": "vus", "refId": "A" },
+        { "expr": "k6_vus_max", "legendFormat": "vus_max", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 3,
+      "title": "Iterations / sec",
+      "gridPos": { "x": 8, "y": 1, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(k6_iterations_total[$__rate_interval]))", "legendFormat": "iter/s", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 4,
+      "title": "Checks pass rate (per check)",
+      "gridPos": { "x": 16, "y": 1, "w": 8, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1.05 }, "overrides": [] },
+      "targets": [
+        { "expr": "k6_checks_rate", "legendFormat": "{{check}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 5,
+      "title": "k6 iteration_duration percentiles",
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] },
+      "targets": [
+        { "expr": "k6_iteration_duration_p50", "legendFormat": "p50", "refId": "A" },
+        { "expr": "k6_iteration_duration_p95", "legendFormat": "p95", "refId": "B" },
+        { "expr": "k6_iteration_duration_p99", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 6,
+      "title": "Iterations / sec by scenario",
+      "description": "k6 doesn't track HTTP request duration here because the xk6 extension drives the bot through its own Go http.Client, bypassing the JS k6/http module. Showing iterations-per-scenario instead — directly comparable across dice / roulette legs.",
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 7 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "targets": [
+        { "expr": "sum by (scenario) (rate(k6_iterations_total[$__rate_interval]))", "legendFormat": "{{scenario}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 7,
+      "title": "telegym-mock — Bot API surface",
+      "gridPos": { "x": 0, "y": 15, "w": 24, "h": 1 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 8,
+      "title": "RPS by method",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (method) (rate(telegym_mock_requests_total[$__rate_interval]))", "legendFormat": "{{method}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 9,
+      "title": "Request duration p95 by method",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, method) (rate(telegym_mock_request_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{method}}", "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "Webhook delivery — rate & result",
+      "gridPos": { "x": 0, "y": 24, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum by (result) (rate(telegym_mock_webhook_dispatches_total[$__rate_interval]))", "legendFormat": "{{result}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 11,
+      "title": "Webhook delivery latency p95",
+      "gridPos": { "x": 12, "y": 24, "w": 12, "h": 7 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(telegym_mock_webhook_dispatch_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95", "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(telegym_mock_webhook_dispatch_duration_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99", "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 12,
+      "title": "Messages stored (per bot)",
+      "gridPos": { "x": 0, "y": 31, "w": 6, "h": 5 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "telegym_mock_messages_stored", "legendFormat": "{{token}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 13,
+      "title": "Files in store",
+      "gridPos": { "x": 6, "y": 31, "w": 6, "h": 5 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "expr": "telegym_mock_files_count", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 14,
+      "title": "File store bytes",
+      "gridPos": { "x": 12, "y": 31, "w": 6, "h": 5 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        { "expr": "telegym_mock_files_bytes", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 15,
+      "title": "Proxy bindings",
+      "description": "Number of (token, chat_id) pairs forwarded to telegym-proxy. 0 means telegym-proxy is not running or hasn't received any inbound messages yet.",
+      "gridPos": { "x": 18, "y": 31, "w": 6, "h": 5 },
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "0",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "textMode": "auto"
+      },
+      "targets": [
+        { "expr": "telegym_mock_proxy_bindings", "refId": "A" }
+      ]
+    }
+  ]
+}

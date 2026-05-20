@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>chat · {{.ChatID}} · telegym</title>
+  <script src="/debug/chat/static/htmx.min.js"></script>
+  <script src="/debug/chat/static/idiomorph-ext.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; height: 100vh; display: flex; flex-direction: column; color: #1a1a1a; background: #efeef0; }
+    header { padding: 0.75rem 1rem; background: #fff; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: baseline; }
+    header h1 { font-size: 1rem; margin: 0; font-weight: 600; }
+    header .meta { font-family: ui-monospace, monospace; font-size: 0.8rem; color: #777; }
+    header a { color: #2a7fff; text-decoration: none; font-size: 0.85rem; }
+    #messages { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+    .msg { max-width: 75%; padding: 0.5rem 0.75rem; border-radius: 12px; word-wrap: break-word; }
+    .msg.bot { background: #fff; align-self: flex-start; border-bottom-left-radius: 2px; }
+    .msg.user { background: #2a7fff; color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; }
+    .msg .ts { display: block; font-size: 0.7rem; color: #999; margin-top: 0.2rem; font-family: ui-monospace, monospace; }
+    .msg.user .ts { color: rgba(255,255,255,0.7); }
+    .msg img { max-width: 100%; border-radius: 4px; margin-top: 0.3rem; }
+    .kbd { display: flex; flex-direction: column; gap: 0.3rem; margin-top: 0.4rem; }
+    .kbd-row { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    /* Default look (no InlineKeyboardButton.style field) -- neutral gray. */
+    .kbd-row button { flex: 1 1 auto; padding: 0.35rem 0.6rem; font-size: 0.85rem; background: #efeef0; color: #555; border: 1px solid #c8c8cc; border-radius: 4px; cursor: pointer; font-family: inherit; transition: background 350ms ease, color 350ms ease, transform 200ms ease; }
+    .kbd-row button:hover { background: #c8c8cc; color: #000; }
+    /* Bot API style variants. */
+    .kbd-row button.kbd-btn-primary { color: #2a7fff; border-color: #2a7fff; }
+    .kbd-row button.kbd-btn-primary:hover { background: #2a7fff; color: #fff; }
+    .kbd-row button.kbd-btn-success { color: #2a8c3a; border-color: #2a8c3a; }
+    .kbd-row button.kbd-btn-success:hover { background: #2a8c3a; color: #fff; }
+    .kbd-row button.kbd-btn-danger { color: #c92121; border-color: #c92121; }
+    .kbd-row button.kbd-btn-danger:hover { background: #c92121; color: #fff; }
+    .kbd-row button.flashed { background: #fff3a0; color: #5a4500; border-color: #d4a100; transform: scale(0.95); transition: none; }
+    .media-tag { display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; background: #f0f0f0; border-radius: 3px; color: #666; margin-bottom: 0.3rem; font-family: ui-monospace, monospace; }
+    .media-tag.missing { background: #fff3cd; color: #856404; border: 1px dashed #d4a72c; }
+    .msg.bot .media-tag { background: #f0f0f0; }
+    form#composer { display: flex; gap: 0.5rem; padding: 0.75rem; background: #fff; border-top: 1px solid #ddd; }
+    form#composer input { flex: 1; padding: 0.55rem 0.75rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 18px; outline: none; }
+    form#composer input:focus { border-color: #2a7fff; }
+    form#composer button { padding: 0.55rem 1.1rem; font-size: 0.95rem; background: #2a7fff; color: #fff; border: none; border-radius: 18px; cursor: pointer; }
+    form#composer button:hover { background: #1f6ee6; }
+    .empty { text-align: center; color: #999; padding: 3rem 1rem; font-style: italic; }
+    .cmd { color: #2a7fff; cursor: pointer; text-decoration: none; font-family: ui-monospace, monospace; font-weight: 500; padding: 0 0.1rem; border-radius: 3px; }
+    .cmd:hover { background: rgba(42,127,255,0.12); text-decoration: underline; }
+    .msg.user .cmd { color: #d4e7ff; }
+    .msg.user .cmd:hover { background: rgba(255,255,255,0.18); }
+    .sticker-big { font-size: 3.5rem; line-height: 1; padding: 0.25rem 0; user-select: none; }
+    .sticker-id { display: inline-block; padding: 0.2rem 0.5rem; font-size: 0.75rem; background: #f0f0f0; color: #555; border-radius: 4px; font-family: ui-monospace, monospace; }
+    /* Callback toast: answerCallbackQuery with ShowAlert=false. 3s
+       overlay at top, non-blocking. CSS animation auto-fades; the inline
+       onanimationend on the .toast removes it from DOM after fade-out. */
+    #toast { position: fixed; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 1000; pointer-events: none; }
+    .toast { background: rgba(0,0,0,0.85); color: #fff; padding: 0.65rem 1.1rem; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.25); max-width: 70ch; font-size: 0.95rem; line-height: 1.35; animation: toastShow 3s ease forwards; }
+    @keyframes toastShow {
+      0%   { opacity: 0; transform: translateY(-8px); }
+      6%   { opacity: 1; transform: translateY(0); }
+      92%  { opacity: 1; transform: translateY(0); }
+      100% { opacity: 0; transform: translateY(-8px); }
+    }
+    /* Callback alert: answerCallbackQuery with ShowAlert=true. Modal,
+       blocks the chat until OK is clicked or backdrop is tapped. Matches
+       real Telegram's modal alert popup. */
+    .alert-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: flex; align-items: center; justify-content: center; z-index: 1100; animation: alertFadeIn 150ms ease forwards; }
+    .alert-box { background: #fff; border-radius: 14px; padding: 1.4rem 1.4rem 1.1rem; min-width: 280px; max-width: 420px; box-shadow: 0 12px 40px rgba(0,0,0,0.35); animation: alertScaleIn 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2) forwards; }
+    .alert-box p { margin: 0 0 1.1rem 0; font-size: 0.95rem; line-height: 1.4; color: #1a1a1a; white-space: pre-wrap; }
+    .alert-box .ok-btn { display: block; margin-left: auto; padding: 0.5rem 1.6rem; background: #2a7fff; color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 0.95rem; font-weight: 500; transition: background 100ms ease; }
+    .alert-box .ok-btn:hover { background: #1f6ee6; }
+    .alert-box .ok-btn:active { background: #1a5fcc; }
+    @keyframes alertFadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes alertScaleIn { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+    .composer-wrap { display: flex; gap: 0.5rem; padding: 0.75rem; background: #fff; border-top: 1px solid #ddd; align-items: center; }
+    .composer-wrap form#composer { flex: 1; display: flex; gap: 0.5rem; padding: 0; background: transparent; border: none; }
+    .cmd-menu { position: relative; }
+    .cmd-toggle { width: 38px; height: 38px; border-radius: 50%; background: #efeef0; color: #2a7fff; border: none; cursor: pointer; font-size: 1.2rem; font-weight: 700; font-family: ui-monospace, monospace; display: flex; align-items: center; justify-content: center; transition: background 120ms ease; }
+    .cmd-toggle:hover { background: #d4e7ff; }
+    .cmd-toggle.open { background: #2a7fff; color: #fff; }
+    .cmd-dropdown { position: absolute; bottom: 46px; left: 0; list-style: none; padding: 0.3rem 0; margin: 0; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); min-width: 200px; max-height: 280px; overflow-y: auto; z-index: 100; }
+    .cmd-dropdown li { padding: 0; }
+    .cmd-dropdown button { width: 100%; padding: 0.55rem 0.8rem; background: transparent; border: none; cursor: pointer; text-align: left; font-family: ui-monospace, monospace; color: #2a7fff; font-size: 0.9rem; }
+    .cmd-dropdown button:hover { background: #eef4ff; }
+    .cmd-dropdown .cmd-source { font-size: 0.65rem; color: #999; font-family: ui-sans-serif; margin-left: 0.4rem; }
+    .cmd-dropdown .cmd-empty { padding: 0.6rem 0.8rem; color: #999; font-style: italic; font-size: 0.85rem; text-align: center; }
+    #reply-kbd:empty { display: none; }
+    #reply-kbd { display: flex; flex-direction: column; gap: 0.4rem; padding: 0.5rem 0.75rem; background: #d8dadf; border-top: 1px solid #c4c7cc; }
+    .reply-row { display: flex; gap: 0.4rem; }
+    .reply-btn { flex: 1; padding: 0.6rem 0.5rem; font-size: 0.95rem; background: #fff; color: #1a1a1a; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+    .reply-btn:hover { background: #f5f5f5; }
+    .reply-btn:active { background: #e5e5e5; }
+  </style>
+</head>
+<body hx-ext="morph">
+  <header>
+    <div>
+      <h1>chat {{.ChatID}} · {{.Name}}</h1>
+      <span class="meta">token {{.TokenShort}} · webhook {{if .WebhookSet}}ready{{else}}<strong style="color:#c33">not set — start your bot</strong>{{end}}</span>
+    </div>
+    <a href="/debug/chat">← chats</a>
+  </header>
+
+  {{/* Toast + alert containers. Populated via hx-swap-oob from the messages
+       poll: #toast for show_alert=false (auto-fade), #alert for
+       show_alert=true (modal, requires user dismissal). */}}
+  <div id="toast"></div>
+  <div id="alert"></div>
+
+  <div id="messages"
+       hx-get="/debug/chat/{{.Token}}/{{.ChatID}}/messages"
+       hx-trigger="load, every 500ms"
+       hx-swap="morph:innerHTML"
+       hx-on::before-swap="this._stick = this.scrollHeight - this.scrollTop - this.clientHeight < 50"
+       hx-on::after-swap="if (this._stick) this.scrollTop = this.scrollHeight">
+  </div>
+
+  <div class="composer-wrap">
+    {{/*
+      Telegram-style command menu. Sources merged on each open:
+        1. Always: /start (so a fresh user can always restart)
+        2. localStorage: commands you typed before (per-chat key)
+        3. DOM scan: every <a class="cmd"> in the current history
+           (bot replies and your own messages with /word references)
+      Click sends the command via the same form path.
+    */}}
+    <div class="cmd-menu">
+      <button type="button" class="cmd-toggle" title="commands" onclick="telegym.toggleCmdMenu(this)">/</button>
+      <ul id="cmd-list" class="cmd-dropdown" hidden></ul>
+    </div>
+
+    <form id="composer"
+          hx-post="/debug/chat/{{.Token}}/{{.ChatID}}/send"
+          hx-swap="none"
+          hx-on::after-request="this.querySelector('input[name=text]').value=''">
+      <input name="name" type="hidden" value="{{.Name}}">
+      <input name="text" placeholder="type a message…" autocomplete="off" autofocus required>
+      <button type="submit">Send</button>
+    </form>
+  </div>
+
+  {{/*
+    Reply keyboard tray. Sits below the composer — matches how a real
+    Telegram client renders ReplyKeyboardMarkup: it occupies the slot
+    where the system on-screen keyboard would normally be, beneath the
+    text input. Populated via hx-swap-oob from the messages poll.
+  */}}
+  <div id="reply-kbd"></div>
+
+  <script>
+    // Record this chat opening into the per-browser MRU list shown on
+    // /debug/chat home. Done early so even if the rest of the script
+    // breaks the entry still lands.
+    (function () {
+      const KEY = 'telegym_recent_chats';
+      const row = {
+        token:    {{.Token | toJSON}},
+        chatID:   {{.ChatID}},
+        name:     {{.Name | toJSON}},
+        openedAt: Date.now(),
+      };
+      try {
+        const list = JSON.parse(localStorage.getItem(KEY)) || [];
+        const without = list.filter(r =>
+          !(r.token === row.token && String(r.chatID) === String(row.chatID))
+        );
+        without.unshift(row);
+        localStorage.setItem(KEY, JSON.stringify(without.slice(0, 20)));
+      } catch (_) { /* private mode / quota — skip silently */ }
+    })();
+  </script>
+
+  <script>
+    (function () {
+      const storageKey = 'telegym_cmds:' + window.location.pathname;
+      const composer = document.getElementById('composer');
+      const textInput = composer.querySelector('input[name=text]');
+      const list = document.getElementById('cmd-list');
+      const toggleBtn = document.querySelector('.cmd-toggle');
+
+      const cmdRe = /^\/[a-zA-Z][a-zA-Z0-9_]*$/;
+
+      function load() {
+        try { return JSON.parse(localStorage.getItem(storageKey)) || []; }
+        catch { return []; }
+      }
+
+      function save(cmds) {
+        try { localStorage.setItem(storageKey, JSON.stringify(cmds.slice(0, 30))); }
+        catch (_) { /* quota full or storage disabled — drop silently */ }
+      }
+
+      function remember(cmd) {
+        if (!cmdRe.test(cmd)) return;
+        const cmds = load().filter(c => c !== cmd);
+        cmds.unshift(cmd); // MRU at top
+        save(cmds);
+      }
+
+      function scanDOM() {
+        const seen = new Set();
+        document.querySelectorAll('#messages .cmd').forEach(el => {
+          const t = (el.textContent || '').trim();
+          if (cmdRe.test(t)) seen.add(t);
+        });
+        return [...seen];
+      }
+
+      function buildList() {
+        // /start always pinned, then MRU localStorage, then DOM-scanned.
+        const merged = ['/start', ...load(), ...scanDOM()];
+        const seen = new Set();
+        return merged.filter(c => cmdRe.test(c) && !seen.has(c) && seen.add(c));
+      }
+
+      // Build list items via DOM APIs only — no innerHTML, no escape
+      // bookkeeping. Commands are also strictly validated by cmdRe.
+      function makeItem(cmd, source) {
+        const li = document.createElement('li');
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.dataset.cmd = cmd;
+        btn.textContent = cmd;
+        if (source) {
+          const tag = document.createElement('span');
+          tag.className = 'cmd-source';
+          tag.textContent = source;
+          btn.appendChild(tag);
+        }
+        li.appendChild(btn);
+        return li;
+      }
+
+      function render() {
+        while (list.firstChild) list.removeChild(list.firstChild);
+        const cmds = buildList();
+        if (cmds.length === 0) {
+          const empty = document.createElement('li');
+          empty.className = 'cmd-empty';
+          empty.textContent = 'no commands yet';
+          list.appendChild(empty);
+          return;
+        }
+        const storedSet = new Set(load());
+        for (const c of cmds) {
+          const src = c === '/start' ? '' : (storedSet.has(c) ? 'used' : 'seen');
+          list.appendChild(makeItem(c, src));
+        }
+      }
+
+      function send(cmd) {
+        if (!cmdRe.test(cmd)) return;
+        textInput.value = cmd;
+        composer.requestSubmit(); // htmx intercepts the submit event
+        remember(cmd);
+        close();
+      }
+
+      function open() {
+        render();
+        list.hidden = false;
+        toggleBtn.classList.add('open');
+      }
+
+      function close() {
+        list.hidden = true;
+        toggleBtn.classList.remove('open');
+      }
+
+      list.addEventListener('click', e => {
+        const btn = e.target.closest('button[data-cmd]');
+        if (btn) send(btn.dataset.cmd);
+      });
+
+      composer.addEventListener('submit', () => {
+        const first = (textInput.value || '').trim().split(/\s/)[0];
+        if (first) remember(first);
+      });
+
+      document.addEventListener('click', e => {
+        if (list.hidden) return;
+        if (e.target.closest('.cmd-menu')) return;
+        close();
+      });
+
+      document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && !list.hidden) close();
+      });
+
+      window.telegym = { toggleCmdMenu: () => list.hidden ? open() : close() };
+    })();
+  </script>
+</body>
+</html>

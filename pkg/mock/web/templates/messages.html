@@ -1,0 +1,77 @@
+{{/*
+  Out-of-band swap: the reply keyboard lives in its own #reply-kbd div
+  between #messages and the composer. Same poll updates both, so when
+  the bot sends a new reply-keyboard or remove_keyboard the bottom tray
+  refreshes on the next 1s tick.
+*/}}
+<div id="reply-kbd" hx-swap-oob="true">
+  {{if .ReplyKeyboard}}
+    {{range .ReplyKeyboard}}
+      <div class="reply-row">
+        {{range .}}
+          <button class="reply-btn"
+                  hx-post="/debug/chat/{{$.Token}}/{{$.ChatID}}/send"
+                  hx-vals='{"text":{{. | toJSON}},"name":"{{$.Name}}"}'
+                  hx-swap="none">{{.}}</button>
+        {{end}}
+      </div>
+    {{end}}
+  {{end}}
+</div>
+
+{{/*
+  Callback feedback OOB swap. Bot's answerCallbackQuery with text branches:
+    show_alert=false → ephemeral toast (3s auto-fade)
+    show_alert=true  → modal alert (blocks until user clicks OK)
+  Targets live in two separate containers (#toast and #alert) so a slow
+  user dismissing an alert doesn't trample fresh toasts on subsequent polls.
+*/}}
+{{with .Toast}}
+  {{if .ShowAlert}}
+    <div id="alert" hx-swap-oob="true">
+      <div class="alert-overlay" onclick="if(event.target===this)this.remove()">
+        <div class="alert-box" role="dialog" aria-modal="true">
+          <p>{{.Text}}</p>
+          <button type="button" class="ok-btn"
+                  onclick="this.closest('.alert-overlay').remove()">OK</button>
+        </div>
+      </div>
+    </div>
+  {{else}}
+    <div id="toast" hx-swap-oob="true">
+      <div class="toast" onanimationend="this.remove()">{{.Text}}</div>
+    </div>
+  {{end}}
+{{end}}
+
+{{if not .Items}}
+  <div class="empty">{{.EmptyHint}}</div>
+{{end}}
+{{range .Items}}
+  <div class="msg {{.Side}}">
+    {{if .StickerEmoji}}
+      <div class="sticker-big" title="sticker {{.StickerFileID}}">{{.StickerEmoji}}</div>
+    {{else if .StickerFileID}}
+      <span class="sticker-id" title="bot sent a sticker by cached file_id; no emoji metadata available in mock">🎴 {{.StickerFileID}}</span>
+    {{else if .MediaTag}}
+      <span class="media-tag">{{.MediaTag}}</span>
+    {{end}}
+    {{if .Text}}<div>{{.Text}}</div>{{end}}
+    {{if .ButtonRows}}
+      <div class="kbd">
+        {{range .ButtonRows}}
+          <div class="kbd-row">
+            {{range .}}
+              <button class="kbd-btn{{with .Style}} kbd-btn-{{.}}{{end}}"
+                      hx-post="/debug/chat/{{$.Token}}/{{$.ChatID}}/click"
+                      hx-vals='{"data":{{.CallbackData | toJSON}},"message_id":{{.MessageID}},"name":"{{$.Name}}"}'
+                      hx-swap="none"
+                      onclick="this.classList.add('flashed'); setTimeout(()=>this.classList.remove('flashed'), 450)">{{.Text}}</button>
+            {{end}}
+          </div>
+        {{end}}
+      </div>
+    {{end}}
+    <span class="ts">{{.Stamp}}{{if .Side | eq "bot"}} · #{{.MessageID}}{{end}}</span>
+  </div>
+{{end}}

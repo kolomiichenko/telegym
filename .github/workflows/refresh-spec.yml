@@ -1,0 +1,53 @@
+name: Refresh Bot API spec
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # every Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull latest spec
+        run: make refresh-spec
+
+      - name: Detect changes
+        id: changes
+        run: |
+          if git diff --quiet pkg/mock/spec/api.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="$(jq -r .version pkg/mock/spec/api.json)"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Open PR
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        env:
+          NEW_VERSION: ${{ steps.changes.outputs.version }}
+        with:
+          branch: chore/refresh-spec
+          commit-message: "chore: refresh Bot API spec"
+          title: "chore: refresh Bot API spec"
+          body: |
+            Auto-generated refresh of `pkg/mock/spec/api.json` from
+            [PaulSonOfLars/telegram-bot-api-spec](https://github.com/PaulSonOfLars/telegram-bot-api-spec).
+
+            ### Review checklist
+            - CI passes (tests cover dispatcher reading the embedded spec)
+            - Diff of `api.json` does not show breaking changes to methods with
+              custom handlers in `pkg/mock/handlers.go` (sendMessage, getMe,
+              setWebhook, answerCallbackQuery, editMessageText, getFile)
+            - Merge → README badge auto-updates via shields.io dynamic JSON
+          labels: |
+            chore
+            dependencies

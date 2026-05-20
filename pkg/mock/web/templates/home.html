@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>telegym · debug chat</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, sans-serif; max-width: 640px; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
+    h1 { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    .hint { color: #666; font-size: 0.9rem; margin-bottom: 2rem; }
+    form { display: grid; gap: 0.75rem; padding: 1.25rem; background: #f5f5f5; border-radius: 8px; }
+    label { display: grid; gap: 0.25rem; font-size: 0.85rem; color: #444; }
+    input { padding: 0.5rem 0.6rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; font-family: ui-monospace, monospace; }
+    button { padding: 0.55rem 1rem; font-size: 1rem; background: #2a7fff; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+    button:hover { background: #1f6ee6; }
+    .recent { margin-top: 2rem; }
+    .recent header { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
+    .recent h2 { font-size: 1rem; color: #666; margin: 0; }
+    .recent .clear { background: none; color: #999; border: none; cursor: pointer; font-size: 0.8rem; padding: 0; }
+    .recent .clear:hover { color: #c33; text-decoration: underline; background: none; }
+    .recent ul { list-style: none; padding: 0; margin: 0; }
+    .recent li { padding: 0.5rem 0; border-bottom: 1px solid #eee; font-size: 0.85rem; display: flex; align-items: baseline; gap: 0.6rem; }
+    .recent li:last-child { border-bottom: none; }
+    .recent a { color: #2a7fff; text-decoration: none; font-family: ui-monospace, monospace; flex: 1; }
+    .recent a:hover { text-decoration: underline; }
+    .recent .ago { color: #999; font-size: 0.75rem; white-space: nowrap; }
+    .recent .name { color: #666; font-size: 0.8rem; }
+    .recent .drop { background: none; border: none; color: #bbb; cursor: pointer; font-size: 1rem; padding: 0 0.2rem; line-height: 1; }
+    .recent .drop:hover { color: #c33; background: none; }
+    .bots-block { margin-top: 1.5rem; }
+    .bots-block header { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.4rem; }
+    .bots-block h2 { font-size: 1rem; color: #666; margin: 0; }
+    .bots-block .count { color: #999; font-size: 0.8rem; }
+    .bots-empty { color: #888; font-size: 0.85rem; background: #fafafa; border: 1px dashed #ddd; border-radius: 4px; padding: 0.7rem 0.8rem; margin: 0; line-height: 1.55; }
+    .bots-empty code { background: #efeef0; padding: 0.05rem 0.3rem; border-radius: 3px; font-size: 0.8rem; }
+    .bot-list { list-style: none; padding: 0; margin: 0; }
+    .bot-list li { margin: 0 0 0.3rem 0; }
+    .bot-row { display: flex; gap: 0.6rem; width: 100%; padding: 0.4rem 0.6rem; background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 4px; cursor: pointer; font-family: ui-monospace, monospace; font-size: 0.82rem; text-align: left; align-items: center; }
+    .bot-row:hover { background: #e8f0fe; border-color: #2a7fff; }
+    .bot-id { color: #2a7fff; font-weight: bold; min-width: 7ch; }
+    .bot-token { color: #888; flex: 1; }
+    .bot-stats { color: #aaa; font-size: 0.75rem; white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <h1>telegym debug chat</h1>
+  <p class="hint">Talk to a bot manually while load tests are running in another terminal. Pick any chat_id — bots see you as that user.</p>
+
+  <form action="/debug/chat/open" method="get">
+    <label>Bot token
+      <input id="token-input" name="token" value="{{.DefaultToken}}" required>
+    </label>
+    <label>Your chat_id
+      <input name="chat_id" type="number" value="{{.DefaultChatID}}" required>
+    </label>
+    <label>Your display name
+      <input name="name" value="{{.DefaultName}}">
+    </label>
+    <button type="submit">Open chat</button>
+  </form>
+
+  {{/*
+    Bots seen by the mock since startup. Click to fill the token field
+    (still editable so you can swap in your own). Server-side rendered --
+    snapshot at page-load, refreshes on reload. Always rendered (even if
+    empty) so the user understands what's expected.
+  */}}
+  <div class="bots-block">
+    <header>
+      <h2>bots seen by this mock</h2>
+      <span class="count">{{len .Bots}}</span>
+    </header>
+    {{if .Bots}}
+      <ul class="bot-list">
+        {{range .Bots}}
+          <li>
+            <button type="button" class="bot-row"
+                    onclick="document.getElementById('token-input').value={{.TokenFull | toJSON}}">
+              <span class="bot-id">{{.BotID}}</span>
+              <span class="bot-token">{{.TokenShort}}</span>
+              <span class="bot-stats">{{.MessagesOut}} msgs · {{.ChatsTracked}} chats</span>
+            </button>
+          </li>
+        {{end}}
+      </ul>
+    {{else}}
+      <p class="bots-empty">
+        No bot has called the mock yet.<br>
+        Start your bot with <code>TELEGRAM_API_URL=http://localhost:5678</code>
+        and a token like <code>1234567890:&lt;35-char-suffix&gt;</code>, then reload this page.
+      </p>
+    {{end}}
+  </div>
+
+  {{/*
+    Recent chats are tracked client-side in localStorage (saved on every
+    chat-view load — see chat.html). That way the list shows what THIS
+    person has opened, not every (token, chat_id) the mock has ever seen
+    from k6 load runs and seed scripts.
+  */}}
+  {{/* Hidden until JS confirms there are entries — see render(). */}}
+  <div class="recent" id="recent-block" hidden>
+    <header>
+      <h2>recent chats (this browser)</h2>
+      <button type="button" class="clear" onclick="telegymHome.clearAll()">clear</button>
+    </header>
+    <ul id="recent-list"></ul>
+  </div>
+
+  <script>
+    (function () {
+      const STORAGE_KEY = 'telegym_recent_chats';
+      const MAX = 20;
+      const list = document.getElementById('recent-list');
+
+      function load() {
+        try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
+        catch { return []; }
+      }
+
+      function save(rows) {
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(rows.slice(0, MAX))); }
+        catch (_) { /* quota — ignore */ }
+      }
+
+      function ago(ts) {
+        const diff = Math.floor((Date.now() - ts) / 1000);
+        if (diff < 60)  return diff + 's ago';
+        if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+        if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+        return Math.floor(diff / 86400) + 'd ago';
+      }
+
+      function shortToken(t) {
+        if (!t || t.length < 12) return t || '';
+        const colon = t.indexOf(':');
+        return colon > 0 ? t.slice(0, colon) : t.slice(0, 8);
+      }
+
+      function makeItem(row) {
+        const li = document.createElement('li');
+
+        const a = document.createElement('a');
+        // Build URL with explicit encoding so weird token chars survive.
+        a.href = '/debug/chat/' + encodeURIComponent(row.token) + '/' +
+                 encodeURIComponent(row.chatID) +
+                 '?name=' + encodeURIComponent(row.name || 'andrii');
+        a.textContent = shortToken(row.token) + ' · chat ' + row.chatID;
+        li.appendChild(a);
+
+        if (row.name) {
+          const name = document.createElement('span');
+          name.className = 'name';
+          name.textContent = '— ' + row.name;
+          li.appendChild(name);
+        }
+
+        const when = document.createElement('span');
+        when.className = 'ago';
+        when.textContent = ago(row.openedAt || Date.now());
+        li.appendChild(when);
+
+        const drop = document.createElement('button');
+        drop.type = 'button';
+        drop.className = 'drop';
+        drop.title = 'remove from recent';
+        drop.textContent = '×';
+        drop.onclick = (e) => {
+          e.preventDefault();
+          const rows = load().filter(r =>
+            !(r.token === row.token && String(r.chatID) === String(row.chatID))
+          );
+          save(rows);
+          render();
+        };
+        li.appendChild(drop);
+
+        return li;
+      }
+
+      const block = document.getElementById('recent-block');
+
+      function render() {
+        while (list.firstChild) list.removeChild(list.firstChild);
+        const rows = load();
+        if (rows.length === 0) {
+          block.hidden = true;
+          return;
+        }
+        for (const row of rows) list.appendChild(makeItem(row));
+        block.hidden = false;
+      }
+
+      window.telegymHome = {
+        clearAll() {
+          if (!confirm('Clear all recent chats from this browser?')) return;
+          localStorage.removeItem(STORAGE_KEY);
+          render();
+        },
+      };
+
+      render();
+    })();
+  </script>
+</body>
+</html>

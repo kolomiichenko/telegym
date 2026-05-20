@@ -1,0 +1,22 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: telegym-mock
+    static_configs:
+      # When telegym-mock runs inside the same compose network this resolves to
+      # the container. When telegym-mock runs on the host (typical dev flow),
+      # override the target via Prometheus' /etc/hosts or use the
+      # docker-host-bridge address shown below.
+      - targets:
+          - 'telegym-mock:9104'         # in-compose
+          - 'host.docker.internal:9104' # telegym-mock on host (macOS/Windows)
+        labels:
+          service: telegym-mock
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: prometheus

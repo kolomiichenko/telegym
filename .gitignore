@@ -1,0 +1,34 @@
+# Binaries
+bin/
+*.exe
+*.test
+*.out
+
+# Local env / state
+.env
+.env.local
+users.json
+dumps/
+*.log
+
+# User pool files (NDJSON) — keep folder, ignore contents.
+# Override with `git add -f data/specific-fixture.ndjson` if you want to commit
+# a specific dataset as a test fixture.
+data/*.ndjson
+!data/.gitkeep
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+# k6 build artifacts
+k6
+xk6-telegym
