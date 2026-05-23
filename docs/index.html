@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>telegym — load testing for Telegram bots</title>
+  <meta name="description" content="Universal load-testing kit for Telegram bots. Drop-in mock of the Bot API plus a k6 extension for virtual-user scenarios. Works with any bot, any language.">
+  <meta name="author" content="Andrii Kolomiichenko">
+  <meta name="theme-color" content="#0b0f14">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://telegym.dev/">
+  <meta property="og:title" content="telegym — load testing for Telegram bots">
+  <meta property="og:description" content="Drop-in mock of the Telegram Bot API plus a k6 extension for virtual-user scenarios. Works with any bot, any language.">
+  <meta property="og:image" content="https://telegym.dev/banner.png">
+  <meta property="og:image:width" content="1280">
+  <meta property="og:image:height" content="640">
+  <meta property="og:site_name" content="telegym">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="telegym — load testing for Telegram bots">
+  <meta name="twitter:description" content="Drop-in mock of the Telegram Bot API plus a k6 extension for virtual-user scenarios.">
+  <meta name="twitter:image" content="https://telegym.dev/banner.png">
+
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🏋️%3C/text%3E%3C/svg%3E">
+  <link rel="canonical" href="https://telegym.dev/">
+
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --bg-2: #11161d;
+      --bg-3: #161c25;
+      --border: #1f2630;
+      --fg: #e6edf3;
+      --fg-dim: #9aa7b4;
+      --fg-mute: #6b7785;
+      --accent: #29a1d4;
+      --accent-2: #7ee787;
+      --warn: #f0a13a;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+    body {
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre, kbd { font-family: var(--mono); }
+    code { background: var(--bg-3); padding: 1px 6px; border-radius: 4px; font-size: 0.9em; color: var(--accent-2); }
+    pre {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      overflow-x: auto;
+      font-size: 13.5px;
+      line-height: 1.55;
+      color: var(--fg);
+    }
+    pre code { background: transparent; padding: 0; color: inherit; font-size: inherit; }
+    h1, h2, h3 { line-height: 1.25; margin: 0 0 12px; font-weight: 700; }
+    h2 { font-size: 1.5rem; margin-top: 48px; color: var(--fg); }
+    h2::before { content: "## "; color: var(--fg-mute); font-family: var(--mono); font-weight: 400; }
+    h3 { font-size: 1.05rem; color: var(--accent-2); }
+    p { margin: 0 0 14px; color: var(--fg-dim); }
+    ul { padding-left: 22px; color: var(--fg-dim); }
+    li { margin-bottom: 6px; }
+    hr { border: none; border-top: 1px solid var(--border); margin: 56px 0; }
+
+    .wrap { max-width: 900px; margin: 0 auto; padding: 0 20px; }
+
+    header {
+      padding: 64px 0 32px;
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      font-family: var(--mono);
+      font-size: 2.6rem;
+      font-weight: 700;
+      letter-spacing: -1px;
+      margin: 0 0 8px;
+      color: var(--fg);
+    }
+    .brand::before { content: "$ "; color: var(--accent); }
+    .brand .cursor {
+      display: inline-block;
+      width: 0.55em;
+      height: 1em;
+      background: var(--accent);
+      vertical-align: -2px;
+      margin-left: 4px;
+      animation: blink 1.05s steps(1) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    .tagline {
+      font-size: 1.15rem;
+      color: var(--fg-dim);
+      margin: 0 0 28px;
+      max-width: 640px;
+    }
+
+    .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 24px; }
+    .btn {
+      display: inline-block;
+      padding: 10px 18px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: transform 0.05s ease, background 0.15s ease;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn-primary { background: var(--accent); color: #0b0f14; }
+    .btn-primary:hover { background: #3ab4e7; }
+    .btn-ghost { background: var(--bg-2); color: var(--fg); border: 1px solid var(--border); }
+    .btn-ghost:hover { background: var(--bg-3); }
+
+    .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+    .badges img { height: 20px; }
+
+    .banner {
+      margin: 40px 0 0;
+      text-align: center;
+    }
+    .banner img {
+      max-width: 440px;
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+    .card {
+      background: var(--bg-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px 20px;
+    }
+    .card h3 { margin-top: 0; margin-bottom: 8px; }
+    .card p { margin: 0; font-size: 0.95rem; }
+
+    .links {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 8px 24px;
+      list-style: none;
+      padding: 0;
+    }
+    .links li { margin: 0; }
+    .links a { font-family: var(--mono); font-size: 0.95rem; }
+    .links a::before { content: "→ "; color: var(--fg-mute); }
+
+    footer {
+      margin-top: 80px;
+      padding: 32px 0;
+      border-top: 1px solid var(--border);
+      color: var(--fg-mute);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+    footer a { color: var(--fg-dim); }
+
+    @media (max-width: 600px) {
+      .brand { font-size: 2rem; }
+      .tagline { font-size: 1rem; }
+      h2 { font-size: 1.3rem; margin-top: 40px; }
+      header { padding: 40px 0 24px; }
+      pre { font-size: 12.5px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1 class="brand">telegym<span class="cursor"></span></h1>
+      <p class="tagline">
+        Load testing for Telegram bots — drop-in mock of the Bot API plus a
+        <code>k6</code> extension for virtual-user scenarios. Works with any
+        bot, any language.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="#quickstart">Get started</a>
+        <a class="btn btn-ghost" href="https://github.com/kolomiichenko/telegym">GitHub →</a>
+      </div>
+      <div class="badges">
+        <a href="https://github.com/kolomiichenko/telegym/actions/workflows/ci.yml"><img src="https://github.com/kolomiichenko/telegym/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+        <a href="https://pkg.go.dev/github.com/kolomiichenko/telegym"><img src="https://pkg.go.dev/badge/github.com/kolomiichenko/telegym.svg" alt="Go Reference"></a>
+        <a href="https://goreportcard.com/report/github.com/kolomiichenko/telegym"><img src="https://goreportcard.com/badge/github.com/kolomiichenko/telegym" alt="Go Report Card"></a>
+        <a href="https://core.telegram.org/bots/api"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkolomiichenko%2Ftelegym%2Fmain%2Fpkg%2Fmock%2Fspec%2Fapi.json&query=%24.version&label=Supported%20Bot%20API&color=29a1d4&logo=telegram" alt="Supported Bot API"></a>
+        <a href="https://github.com/kolomiichenko/telegym/releases"><img src="https://img.shields.io/github/v/release/kolomiichenko/telegym" alt="Latest Release"></a>
+        <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+      </div>
+      <div class="banner">
+        <img src="banner.png" alt="telegym — load testing for Telegram bots">
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2 id="why">Why</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>vs telegram-test-api</h3>
+          <p>Node-based mock is great for functional smoke tests, but not designed for thousands of concurrent virtual users.</p>
+        </div>
+        <div class="card">
+          <h3>vs Test DC</h3>
+          <p>Real Telegram infrastructure with Telethon / Pyrogram is accurate but expensive — each VU is a real MTProto session, throttled above a few hundred clients.</p>
+        </div>
+        <div class="card">
+          <h3>vs raw k6</h3>
+          <p>k6 is the industry standard for load, but it speaks HTTP, not Bot API. telegym bridges the gap with an <code>xk6</code> extension.</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="architecture">Architecture</h2>
+      <pre><code>  k6 scenario  ──► xk6-telegym ──► /debug/inject/update ──► telegym-mock
+                                                              │
+                                                              ▼
+                                                  POST &lt;bot_webhook_url&gt;
+                                                              │
+                                                              ▼
+                                                         your bot
+                                                              │
+                                                              ▼
+                                                  POST telegym-mock/bot&lt;token&gt;/sendMessage
+                                                              │
+                                                              ▼
+                                                  stored in telegym-mock.botMessages
+                                                              │
+                                                              ▼
+                                       xk6.awaitButton ◄── GET /debug/botMessages</code></pre>
+    </section>
+
+    <section>
+      <h2 id="quickstart">Quickstart</h2>
+      <p>Three commands to build and smoke-test the full stack against the bundled echobot:</p>
+      <pre><code># Optional one-time setup: copies .env.example -> .env and pre-fetches modules.
+make init
+
+# Build the mock, proxy, demo echobot, and a custom k6 with the xk6-telegym
+# extension. The k6 build takes ~13s the first time.
+make build build-examples
+
+# Smoke test the full stack against the bundled echobot example
+./examples/echobot/run.sh
+
+# Output:
+#   checks_total.......: 10440   258.85/s
+#   checks_succeeded...: 100.00% 10440 out of 10440
+#   ✓ welcome arrived
+#   ✓ welcome under 500ms</code></pre>
+      <p>Point your own bot at the mock and write a scenario:</p>
+      <pre><code>export TELEGRAM_API_URL=http://localhost:5678
+export TELEGRAM_TOKEN=1234567890:telegym_default_mock_token_xxxxxxxx
+./your-bot                       # bot calls setWebhook automatically
+
+./bin/k6 run path/to/your-scenario.js</code></pre>
+    </section>
+
+    <section>
+      <h2 id="scenario">Scenario API</h2>
+      <p>JS scenarios import the extension as <code>k6/x/telegym</code> and get a default export exposing <code>newUser()</code>:</p>
+      <pre><code>import tg from 'k6/x/telegym';
+
+const u = tg.newUser(0);             // 0 = auto-allocate chat ID per VU
+u.send('/start');                    // inject a text message
+const m = u.awaitText('^Welcome', 5); // wait up to 5s for matching reply
+u.click('age_verify');               // inject a callback query</code></pre>
+    </section>
+
+    <section>
+      <h2 id="features">What's in the box</h2>
+      <ul>
+        <li><strong>Mock Bot API server</strong> — all 176 methods accepted, 15 with real side effects, the rest dispatched via the official spec.</li>
+        <li><strong>xk6 extension</strong> — virtual Telegram users from k6 scenarios with <code>send</code>, <code>click</code>, <code>awaitText</code>, <code>findButton</code>.</li>
+        <li><strong>User pools</strong> — two-phase scenarios (register-then-replay) via NDJSON files, with <code>TAG</code> / <code>OFFSET</code> / <code>LIMIT</code> / <code>SHUFFLE</code> env knobs.</li>
+        <li><strong>HTMX debug chat</strong> — browser UI for manual testing, served by the mock itself, no real Telegram.</li>
+        <li><strong>Real-Telegram relay</strong> (<code>telegym-proxy</code>) — drive the bot-under-test from a real Telegram client through a throwaway proxy bot.</li>
+        <li><strong>Metrics &amp; dashboards</strong> — Prometheus + Grafana stack with a pre-provisioned dashboard correlating k6 load and mock-side latency.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2 id="links">Links</h2>
+      <ul class="links">
+        <li><a href="https://github.com/kolomiichenko/telegym">Repository</a></li>
+        <li><a href="https://github.com/kolomiichenko/telegym/blob/main/README.md">README</a></li>
+        <li><a href="https://pkg.go.dev/github.com/kolomiichenko/telegym">Go reference (godoc)</a></li>
+        <li><a href="https://deepwiki.com/kolomiichenko/telegym">DeepWiki</a></li>
+        <li><a href="https://github.com/kolomiichenko/telegym/releases">Releases</a></li>
+        <li><a href="https://github.com/kolomiichenko/telegym/blob/main/CONTRIBUTING.md">Contributing</a></li>
+        <li><a href="https://github.com/kolomiichenko/telegym/blob/main/SECURITY.md">Security policy</a></li>
+        <li><a href="https://github.com/kolomiichenko/telegym/issues">Issues</a></li>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      MIT © 2026 <a href="https://github.com/kolomiichenko">Andrii Kolomiichenko</a> ·
+      <a href="https://github.com/kolomiichenko/telegym">source</a>
+    </div>
+  </footer>
+</body>
+</html>
