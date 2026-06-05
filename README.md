@@ -51,11 +51,11 @@ plus an `xk6` extension so k6 scenarios can drive virtual Telegram users.
 
 ## Prerequisites
 
-- **Go 1.26+** - install from <https://go.dev/dl/> (exact version is pinned in `go.mod`)
+- **Go 1.26+** - install from <https://go.dev/dl/> (exact version pinned in `go.mod`). Needed to compile the mock, the proxy, and the custom k6 build.
 - **make** - preinstalled on macOS with Xcode CLI tools (`xcode-select --install`), `apt install make` on Debian/Ubuntu
-- *(optional)* **Docker + Docker Compose** - only needed for `make grafana-up` (Prometheus + Grafana dashboards)
+- *(optional)* **Docker Compose v2** (`docker compose`) - only needed for `make grafana-up` (Prometheus + Grafana dashboards)
 
-All other tools - `xk6` for the custom k6 build, the k6 binary itself, golangci-lint, govulncheck, etc. - are either installed on demand by the relevant `make` targets or are purely optional.
+> **About k6.** Don't `brew install k6` or grab a prebuilt binary - it won't work. The k6 used here is a custom build with the bundled `xk6-telegym` extension (exposes `k6/x/telegym` to JS scenarios), assembled into `./bin/k6` by `make k6` / `make build` (uses Go from the prerequisite above). Every example in this README that says `./bin/k6 ...` means *that* binary; a system `k6` won't recognise the `k6/x/telegym` import. `xk6` itself is fetched on demand by the make target, so you don't install it manually either. Same applies to golangci-lint, govulncheck, etc. - all optional, all on-demand.
 
 ## Quickstart
 
@@ -79,14 +79,31 @@ make build build-examples
 #   ...
 ```
 
-For your own bot, point it at the mock and write a scenario:
+For your own bot, point it at the mock and either click around manually or run a k6 scenario:
 
 ```bash
+# 1. Start the mock (separate terminal, or `make mock-up` to background it)
+./bin/telegym-mock
+
+# 2. Run your bot against the mock. It calls setWebhook itself on startup.
 export TELEGRAM_API_URL=http://localhost:5678
 export TELEGRAM_TOKEN=1234567890:telegym_default_mock_token_xxxxxxxx
-./your-bot                                   # bot calls setWebhook automatically
+./your-bot
 
+# 3.1. Manual smoke test — open the built-in browser chat:
+#     http://localhost:5678/debug/chat
+#     Pick any chat_id, type /start, click inline buttons. No Telegram account
+#     needed. See "Real-user modes → HTMX debug chat" below for details.
+open http://localhost:5678/debug/chat   # or `make debug-chat`
+
+# 3.2. Load test — drive the bot with k6. NOTE the path: `./bin/k6` is the
+#     custom build with the xk6-telegym extension. A `brew install k6`
+#     binary will fail with "module 'k6/x/telegym' not found".
 ./bin/k6 run path/to/your-scenario.js
+
+# 3.3. Real-Telegram test — drive the bot from your phone/desktop Telegram
+#     client through a throwaway @BotFather bot. Native stickers, formatting,
+#     attachments. See "Real-user modes → Real-Telegram relay" below for setup.
 ```
 
 ## Configuration
@@ -239,14 +256,23 @@ bot-under-test through a throwaway proxy bot. Native stickers, formatting,
 inline buttons, attachments.
 
 ```bash
-# 1. Create a bot via @BotFather, copy its token
+# 1. Create a throwaway bot via @BotFather, copy its token
 export PROXY_TOKEN=12345:abc...
 
-# 2. Run mock + echobot + telegym-proxy
+# 2. Tell the proxy which token your bot-under-test uses against the mock.
+# Must match TELEGRAM_TOKEN in your bot's env.
+export MOCK_BOT_TOKEN=1234567890:telegym_default_mock_token_xxxxxxxx
+
+# 3. Start your bot-under-test in a separate terminal, pointed at the mock:
+#    TELEGRAM_API_URL=http://localhost:5678 \
+#    TELEGRAM_TOKEN=$MOCK_BOT_TOKEN \
+#    ./your-bot
+
+# 4. Run mock + telegym-proxy (this does NOT start your bot, see step 3)
 make proxy-up
 # make proxy-down  to stop
 
-# 3. Open @your_proxy_bot in Telegram - every message you send is relayed
+# 5. Open @your_proxy_bot in Telegram - every message you send is relayed
 #    to the bot-under-test, every reply comes back through real Telegram.
 ```
 
@@ -282,13 +308,18 @@ dashboard:
 | bot-under-test | whatever you already export | scrape your existing endpoint |
 
 ```bash
-# 1. Bring up the Prometheus + Grafana stack
+# 1. Bring up the Prometheus + Grafana stack.
+# Requires Docker + Docker Compose v2 on the host (see Prerequisites).
+# Uses docker/docker-compose.yml under the hood.
 make grafana-up
-#    Prometheus:  http://localhost:9090
-#    Grafana:     http://localhost:3000  (anonymous admin; auto-loads telegym dashboard)
+#    Prometheus:  http://localhost:9091
+#    Grafana:     http://localhost:3001  (anonymous admin; auto-loads telegym dashboard)
 
 # 2. Run a scenario that pushes to Prometheus while the mock scrapes itself
 make scenario-prom
+
+# Stop the stack when done:
+make grafana-down
 ```
 
 The dashboard `telegym.json` is auto-provisioned and shows k6 and mock

@@ -266,12 +266,17 @@ make build build-examples
 #   checks_succeeded...: 100.00% 10440 out of 10440
 #   ✓ welcome arrived
 #   ✓ welcome under 500ms</code></pre>
-      <p>Point your own bot at the mock and write a scenario:</p>
-      <pre><code>export TELEGRAM_API_URL=http://localhost:5678
-export TELEGRAM_TOKEN=1234567890:telegym_default_mock_token_xxxxxxxx
-./your-bot                       # bot calls setWebhook automatically
+      <p>Point your own bot at the mock — then drive it manually in a browser, or with k6, or even from real Telegram:</p>
+      <pre><code># Start the mock and your bot (separate terminals)
+./bin/telegym-mock
+TELEGRAM_API_URL=http://localhost:5678 \
+TELEGRAM_TOKEN=1234567890:telegym_default_mock_token_xxxxxxxx \
+./your-bot                          # bot calls setWebhook automatically
 
-./bin/k6 run path/to/your-scenario.js</code></pre>
+# Then pick a driver:
+open http://localhost:5678/debug/chat   # manual click-around in the browser
+./bin/k6 run path/to/your-scenario.js   # load test (use ./bin/k6, not `brew install k6` — the bundled binary has the xk6-telegym extension)
+make proxy-up                           # real Telegram client → mock (needs PROXY_TOKEN + MOCK_BOT_TOKEN)</code></pre>
     </section>
 
     <section>

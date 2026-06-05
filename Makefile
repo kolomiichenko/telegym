@@ -161,12 +161,12 @@ proxy-down: ## Stop the proxy stack
 	@echo stopped
 
 grafana-up: ## Start Prometheus + Grafana (use with host-mode telegym-mock)
-	docker-compose -f docker/docker-compose.yml up -d prometheus grafana
+	docker compose -f docker/docker-compose.yml up -d prometheus grafana
 	@echo "Prometheus: http://localhost:9091"
 	@echo "Grafana:    http://localhost:3001  (anonymous admin, dashboard telegym)"
 
 grafana-down: ## Stop Prometheus + Grafana
-	docker-compose -f docker/docker-compose.yml stop prometheus grafana
+	docker compose -f docker/docker-compose.yml stop prometheus grafana
 
 ##@ Browser helpers
 
