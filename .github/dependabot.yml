@@ -36,6 +36,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # actions/checkout v6 has a known "Duplicate header: Authorization"
+      # bug breaking PR builds (actions/checkout#2299). Stay on v5 until fixed.
+      - dependency-name: actions/checkout
+        versions: [">= 6"]
     commit-message:
       prefix: ci
     labels:
