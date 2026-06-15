@@ -1,0 +1,43 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    allow:
+      - dependency-name: github.com/mymmrac/telego
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - chore
+      - dependencies
+
+  - package-ecosystem: gomod
+    directory: /pkg/xk6
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    allow:
+      - dependency-name: go.k6.io/k6
+    commit-message:
+      prefix: chore
+      include: scope
+    labels:
+      - chore
+      - dependencies
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+    labels:
+      - ci
+      - dependencies
