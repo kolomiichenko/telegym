@@ -31,7 +31,7 @@ jobs:
 
       - name: Open PR
         if: steps.changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         env:
           NEW_VERSION: ${{ steps.changes.outputs.version }}
         with:
