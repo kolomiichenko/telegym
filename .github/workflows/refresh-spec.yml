@@ -13,7 +13,7 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Pull latest spec
         run: make refresh-spec
@@ -31,7 +31,7 @@ jobs:
 
       - name: Open PR
         if: steps.changes.outputs.changed == 'true'
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v7
         env:
           NEW_VERSION: ${{ steps.changes.outputs.version }}
         with:
