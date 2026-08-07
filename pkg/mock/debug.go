@@ -61,6 +61,7 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 			Data:         req.CallbackData,
 			Message: &Message{
 				MessageID: req.MessageID,
+				From:      &bot.identity,
 				Chat:      Chat{ID: req.ChatID, Type: "private"},
 				Date:      time.Now().Unix(),
 			},

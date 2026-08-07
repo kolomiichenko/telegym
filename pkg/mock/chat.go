@@ -332,6 +332,7 @@ func (h *chatHandlers) click(c *gin.Context) {
 			Data:         req.Data,
 			Message: &Message{
 				MessageID: req.MessageID,
+				From:      &bot.identity,
 				Chat:      Chat{ID: chatID, Type: "private"},
 				Date:      time.Now().Unix(),
 			},

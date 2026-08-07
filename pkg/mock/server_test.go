@@ -237,4 +237,32 @@ func TestInjectUpdateFiresWebhook(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("webhook never fired within 2s")
 	}
+
+	// Same path, callback-shaped. callback_query.message must carry a
+	// `from`: on real Telegram that message was sent by the bot, and bots
+	// dereference message.From without a nil check. A stub without it
+	// panics the bot under test, and the k6 scenario just times out
+	// waiting for a reply that never comes.
+	payload = `{"token":"` + token + `","chat_id":99,"callback_data":"age_verify","message_id":7}`
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/debug/inject/update", bytes.NewBufferString(payload))
+	req.Header.Set("Content-Type", "application/json")
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inject callback status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case body := <-received:
+		var upd Update
+		if err := json.Unmarshal(body, &upd); err != nil {
+			t.Fatalf("decode webhook body: %v -- body=%s", err, string(body))
+		}
+		msg := upd.CallbackQuery.Message
+		if msg == nil || msg.From == nil || !msg.From.IsBot {
+			t.Errorf("callback_query.message.from = %+v, want the bot identity", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("callback webhook never fired within 2s")
+	}
 }
