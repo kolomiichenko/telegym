@@ -24,7 +24,7 @@ updates:
       time: "06:00"
       timezone: Etc/UTC
     allow:
-      - dependency-name: go.k6.io/k6
+      - dependency-name: go.k6.io/k6/v2
     commit-message:
       prefix: chore
       include: scope
