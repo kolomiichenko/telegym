@@ -51,7 +51,7 @@ plus an `xk6` extension so k6 scenarios can drive virtual Telegram users.
 
 ## Prerequisites
 
-- **Go 1.26+** - install from <https://go.dev/dl/> (exact version pinned in `go.mod`). Needed to compile the mock, the proxy, and the custom k6 build.
+- **Go 1.27+** - install from <https://go.dev/dl/> (exact version pinned in `go.mod`). Needed to compile the mock, the proxy, and the custom k6 build.
 - **make** - preinstalled on macOS with Xcode CLI tools (`xcode-select --install`), `apt install make` on Debian/Ubuntu
 - *(optional)* **Docker Compose v2** (`docker compose`) - only needed for `make grafana-up` (Prometheus + Grafana dashboards)
 
