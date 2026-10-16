@@ -204,7 +204,7 @@ func (c *messagesCollector) Collect(ch chan<- prometheus.Metric) {
 	defer c.store.mu.RUnlock()
 	for token, b := range c.store.bots {
 		b.msgMu.RLock()
-		n := float64(len(b.messages))
+		n := float64(len(newest(b.messages, b.maxMessages)))
 		b.msgMu.RUnlock()
 		ch <- prometheus.MustNewConstMetric(c.desc, prometheus.GaugeValue, n, maskToken(token))
 	}

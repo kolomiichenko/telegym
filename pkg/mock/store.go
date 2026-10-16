@@ -161,8 +161,9 @@ func (s *Store) Bots() []BotInfo {
 	out := make([]BotInfo, 0, len(s.bots))
 	for tok, b := range s.bots {
 		b.msgMu.RLock()
-		msgs := len(b.messages)
-		chats := uniqueChatIDs(b.messages)
+		stored := newest(b.messages, b.maxMessages)
+		msgs := len(stored)
+		chats := uniqueChatIDs(stored)
 		b.msgMu.RUnlock()
 		out = append(out, BotInfo{
 			TokenShort:   shortenToken(tok),
@@ -229,7 +230,7 @@ func (b *botEntry) Webhook() (url, secret string) {
 	return
 }
 
-// AppendMessage stores an outbound message and trims to maxMessages.
+// AppendMessage stores an outbound message, keeping the newest maxMessages.
 // Also dispatches to the proxy registry for any (token, chat_id) bound
 // to a relay - this is what makes real-Telegram proxying work without
 // each handler having to remember to forward.
@@ -254,11 +255,7 @@ func (b *botEntry) storeMessage(m Message) {
 		m.EventSeq = int64(b.parent.NextMessageID())
 	}
 	b.msgMu.Lock()
-	b.messages = append(b.messages, m)
-	if over := len(b.messages) - b.maxMessages; over > 0 {
-		copy(b.messages, b.messages[over:])
-		b.messages = b.messages[:b.maxMessages]
-	}
+	b.messages = appendCapped(b.messages, m, b.maxMessages)
 	b.msgMu.Unlock()
 }
 
@@ -331,10 +328,11 @@ func (b *botEntry) Messages(chatID int64, limit int) []Message {
 	b.msgMu.RLock()
 	defer b.msgMu.RUnlock()
 
+	stored := newest(b.messages, b.maxMessages)
 	out := make([]Message, 0, limit)
-	for i := len(b.messages) - 1; i >= 0 && len(out) < limit; i-- {
-		if chatID == 0 || b.messages[i].Chat.ID == chatID {
-			out = append(out, b.messages[i])
+	for i := len(stored) - 1; i >= 0 && len(out) < limit; i-- {
+		if chatID == 0 || stored[i].Chat.ID == chatID {
+			out = append(out, stored[i])
 		}
 	}
 	return out
@@ -347,7 +345,7 @@ func (b *botEntry) MessagesSince(chatID, sinceUnix int64) []Message {
 	defer b.msgMu.RUnlock()
 
 	var out []Message
-	for _, m := range b.messages {
+	for _, m := range newest(b.messages, b.maxMessages) {
 		if m.Date < sinceUnix {
 			continue
 		}
@@ -518,11 +516,7 @@ func (b *botEntry) AppendInput(in UserInput) {
 		in.Seq = b.parent.NextMessageID()
 	}
 	b.inputsMu.Lock()
-	b.inputs = append(b.inputs, in)
-	if over := len(b.inputs) - b.maxInputs; over > 0 {
-		copy(b.inputs, b.inputs[over:])
-		b.inputs = b.inputs[:b.maxInputs]
-	}
+	b.inputs = appendCapped(b.inputs, in, b.maxInputs)
 	b.inputsMu.Unlock()
 }
 
@@ -531,10 +525,32 @@ func (b *botEntry) Inputs(chatID int64) []UserInput {
 	b.inputsMu.RLock()
 	defer b.inputsMu.RUnlock()
 	var out []UserInput
-	for _, in := range b.inputs {
+	for _, in := range newest(b.inputs, b.maxInputs) {
 		if in.ChatID == chatID {
 			out = append(out, in)
 		}
 	}
 	return out
+}
+
+// appendCapped appends v to a buffer that keeps the newest limit entries.
+// The slice grows to 2*limit before the oldest entries are dropped in a single
+// copy, so appends stay O(1) amortized instead of shifting the whole buffer
+// on every call once it is full. Readers see the newest limit via newest.
+func appendCapped[T any](s []T, v T, limit int) []T {
+	s = append(s, v)
+	if len(s) > 2*limit {
+		n := copy(s, s[len(s)-limit:])
+		clear(s[n:])
+		s = s[:n]
+	}
+	return s
+}
+
+// newest returns the last limit entries of a buffer filled by appendCapped.
+func newest[T any](s []T, limit int) []T {
+	if len(s) > limit {
+		return s[len(s)-limit:]
+	}
+	return s
 }
