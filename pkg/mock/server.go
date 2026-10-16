@@ -220,6 +220,7 @@ func (s *Server) registerBotAPI(g *gin.RouterGroup) {
 	g.POST("/sendSticker", s.withBot(s.handlers.SendSticker))
 	g.POST("/sendDice", s.withBot(s.handlers.SendDice))
 	g.POST("/editMessageText", s.withBot(s.handlers.EditMessageText))
+	g.POST("/editMessageCaption", s.withBot(s.handlers.EditMessageCaption))
 	g.POST("/editMessageReplyMarkup", s.withBot(s.handlers.EditMessageReplyMarkup))
 	g.POST("/editMessageMedia", s.withBot(s.handlers.EditMessageMedia))
 

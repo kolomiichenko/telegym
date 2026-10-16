@@ -35,14 +35,15 @@ type Chat struct {
 }
 
 type Message struct {
-	MessageID   int          `json:"message_id"`
-	From        *User        `json:"from,omitempty"`
-	Date        int64        `json:"date"`
-	Chat        Chat         `json:"chat"`
-	Text        string       `json:"text,omitempty"`
-	Caption     string       `json:"caption,omitempty"`
-	Entities    []Entity     `json:"entities,omitempty"`
-	ReplyMarkup *ReplyMarkup `json:"reply_markup,omitempty"`
+	MessageID       int          `json:"message_id"`
+	From            *User        `json:"from,omitempty"`
+	Date            int64        `json:"date"`
+	Chat            Chat         `json:"chat"`
+	Text            string       `json:"text,omitempty"`
+	Caption         string       `json:"caption,omitempty"`
+	Entities        []Entity     `json:"entities,omitempty"`
+	CaptionEntities []Entity     `json:"caption_entities,omitempty"`
+	ReplyMarkup     *ReplyMarkup `json:"reply_markup,omitempty"`
 
 	Photo     []PhotoSize `json:"photo,omitempty"`
 	Video     *Video      `json:"video,omitempty"`
@@ -160,11 +161,20 @@ type ChatMember struct {
 	User   User   `json:"user"`
 }
 
+type ChatMemberUpdated struct {
+	Chat          Chat       `json:"chat"`
+	From          User       `json:"from"`
+	Date          int64      `json:"date"`
+	OldChatMember ChatMember `json:"old_chat_member"`
+	NewChatMember ChatMember `json:"new_chat_member"`
+}
+
 type Update struct {
-	UpdateID      int64          `json:"update_id"`
-	Message       *Message       `json:"message,omitempty"`
-	EditedMessage *Message       `json:"edited_message,omitempty"`
-	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+	UpdateID      int64              `json:"update_id"`
+	Message       *Message           `json:"message,omitempty"`
+	EditedMessage *Message           `json:"edited_message,omitempty"`
+	CallbackQuery *CallbackQuery     `json:"callback_query,omitempty"`
+	ChatMember    *ChatMemberUpdated `json:"chat_member,omitempty"`
 }
 
 // WebhookInfo mirrors the response of getWebhookInfo.

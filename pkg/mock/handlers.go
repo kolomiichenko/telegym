@@ -211,6 +211,32 @@ func (h *Handlers) EditMessageReplyMarkup(c *gin.Context, bot *botEntry) {
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
 }
 
+func (h *Handlers) EditMessageCaption(c *gin.Context, bot *botEntry) {
+	body, err := readBody(c)
+	if err != nil {
+		errResp(c, http.StatusBadRequest, "Bad Request: "+err.Error())
+		return
+	}
+	if toString(body["inline_message_id"]) != "" {
+		c.JSON(http.StatusOK, APIResponse{OK: true, Result: true})
+		return
+	}
+
+	// Like other edit handlers, record an event for the original message ID
+	// rather than replacing the previous entry in the outbound history.
+	m := Message{
+		MessageID:       toInt(body["message_id"]),
+		From:            &bot.identity,
+		Date:            time.Now().Unix(),
+		Chat:            Chat{ID: toInt64(body["chat_id"]), Type: "private"},
+		Caption:         toString(body["caption"]),
+		CaptionEntities: parseEntities(body["caption_entities"]),
+		ReplyMarkup:     parseReplyMarkup(body["reply_markup"]),
+	}
+	bot.AppendMessage(m)
+	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
+}
+
 func (h *Handlers) EditMessageMedia(c *gin.Context, bot *botEntry) {
 	body, err := readBody(c)
 	if err != nil {

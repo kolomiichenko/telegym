@@ -11,21 +11,31 @@ import (
 // DebugAPI exposes endpoints used by the xk6 extension (and humans via curl)
 // to drive the bot: inject Updates and inspect what the bot has sent.
 
-// InjectUpdateRequest describes a synthetic Update the load runner wants to
-// deliver to the bot via webhook. Either Message or CallbackQuery is required.
+// InjectUpdateRequest describes a synthetic Update delivered to the bot's webhook.
 type InjectUpdateRequest struct {
 	Token string `json:"token" binding:"required"`
+
+	// Type defaults to message, or callback_query when callback_data is nonempty.
+	Type string `json:"type"`
 
 	// Message-shaped update
 	UserID    int64  `json:"user_id"`
 	ChatID    int64  `json:"chat_id"`
+	ChatType  string `json:"chat_type"`
+	ChatTitle string `json:"chat_title"`
 	Username  string `json:"username"`
 	FirstName string `json:"first_name"`
 	Text      string `json:"text"`
+	MessageID int    `json:"message_id"` // original message for edits and callbacks
 
 	// Callback-shaped update
 	CallbackData string `json:"callback_data"`
-	MessageID    int    `json:"message_id"` // message the callback button belongs to
+
+	// Chat-member-shaped update. ActorID defaults to the affected user.
+	// Only member and left statuses are supported.
+	ActorID   int64  `json:"actor_id"`
+	OldStatus string `json:"old_status"`
+	NewStatus string `json:"new_status"`
 }
 
 func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
@@ -48,11 +58,23 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 		req.Username = "user_" + strconv.FormatInt(req.UserID, 10)
 	}
 
+	if req.ChatType == "" {
+		req.ChatType = "private"
+	}
+	if req.Type == "" {
+		if req.CallbackData != "" {
+			req.Type = "callback_query"
+		} else {
+			req.Type = "message"
+		}
+	}
+
 	from := User{ID: req.UserID, IsBot: false, FirstName: req.FirstName, Username: req.Username}
+	chat := Chat{ID: req.ChatID, Type: req.ChatType, Title: req.ChatTitle}
 	upd := Update{UpdateID: h.Store.NextUpdateID()}
 
-	switch {
-	case req.CallbackData != "":
+	switch req.Type {
+	case "callback_query":
 		cbID := strconv.FormatInt(time.Now().UnixNano(), 10)
 		upd.CallbackQuery = &CallbackQuery{
 			ID:           cbID,
@@ -61,7 +83,8 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 			Data:         req.CallbackData,
 			Message: &Message{
 				MessageID: req.MessageID,
-				Chat:      Chat{ID: req.ChatID, Type: "private"},
+				From:      &bot.identity,
+				Chat:      chat,
 				Date:      time.Now().Unix(),
 			},
 		}
@@ -69,17 +92,46 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 		// answerCallbackQuery(cb_id, text=...) can route the toast back
 		// to the correct chat for the debug UI.
 		bot.RegisterCallback(cbID, req.ChatID)
-	default:
-		upd.Message = &Message{
-			MessageID: h.Store.NextMessageID(),
+	case "message", "edited_message":
+		if chat.Type == "private" {
+			chat.FirstName = req.FirstName
+			chat.Username = req.Username
+		}
+		messageID := req.MessageID
+		if req.Type == "message" || messageID == 0 {
+			messageID = h.Store.NextMessageID()
+		}
+		message := &Message{
+			MessageID: messageID,
 			From:      &from,
 			Date:      time.Now().Unix(),
-			Chat: Chat{
-				ID: req.ChatID, Type: "private",
-				FirstName: req.FirstName, Username: req.Username,
-			},
-			Text: req.Text,
+			Chat:      chat,
+			Text:      req.Text,
 		}
+		if req.Type == "edited_message" {
+			upd.EditedMessage = message
+		} else {
+			upd.Message = message
+		}
+	case "chat_member":
+		if !supportedMemberStatus(req.OldStatus) || !supportedMemberStatus(req.NewStatus) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "old_status and new_status must be member or left"})
+			return
+		}
+		actor := from
+		if req.ActorID != 0 && req.ActorID != req.UserID {
+			actor = User{ID: req.ActorID, FirstName: "update actor"}
+		}
+		upd.ChatMember = &ChatMemberUpdated{
+			Chat:          chat,
+			From:          actor,
+			Date:          time.Now().Unix(),
+			OldChatMember: ChatMember{Status: req.OldStatus, User: from},
+			NewChatMember: ChatMember{Status: req.NewStatus, User: from},
+		}
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported update type"})
+		return
 	}
 
 	status, err := h.WebhookDispatcher.Deliver(c.Request.Context(), bot, upd)
@@ -101,6 +153,11 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 		resp["callback_query_id"] = upd.CallbackQuery.ID
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func supportedMemberStatus(status string) bool {
+	// Other member variants require fields the injection API cannot supply.
+	return status == "member" || status == "left"
 }
 
 // DebugListMessages returns outbound messages stored for a bot, optionally
