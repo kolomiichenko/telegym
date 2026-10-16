@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -203,18 +204,33 @@ func (h *Handlers) DebugServeFile(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "file not found", "file_id": id})
 		return
 	}
-	ct := f.ContentType
-	if ct == "" {
-		ct = "application/octet-stream"
+	// Uploaded bytes and their declared Content-Type come from the client, and
+	// this origin also serves the debug chat. Only bytes that sniff as an
+	// image are served inline; everything else is a download, so an upload
+	// declared as text/html (or an HTML/SVG polyglot) never renders as a page.
+	ct, disposition := "application/octet-stream", "attachment"
+	if sniffed := http.DetectContentType(f.Bytes); strings.HasPrefix(sniffed, "image/") {
+		ct, disposition = sniffed, "inline"
+	} else if isPassiveMediaType(f.ContentType) {
+		ct = f.ContentType
 	}
 	c.Header("Content-Type", ct)
 	c.Header("Content-Length", strconv.Itoa(len(f.Bytes)))
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Content-Security-Policy", "default-src 'none'; sandbox")
 	if f.Filename != "" {
-		c.Header("Content-Disposition", fmt.Sprintf(`inline; filename=%q`, f.Filename))
+		disposition += fmt.Sprintf(`; filename=%q`, f.Filename)
 	}
+	c.Header("Content-Disposition", disposition)
 	c.Header("X-Mock-Kind", f.Kind)
 	c.Status(http.StatusOK)
 	_, _ = c.Writer.Write(f.Bytes)
+}
+
+// isPassiveMediaType reports whether a declared upload type is audio or
+// video, which browsers play rather than render as a document.
+func isPassiveMediaType(ct string) bool {
+	return strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "audio/")
 }
 
 // DebugListFiles is a debugging convenience: shows store stats and the
