@@ -11,17 +11,17 @@ import (
 	"time"
 )
 
-// WebhookDispatcher delivers Updates to a bot's registered webhook URL. Used by the
-// debug inject endpoints and by the xk6 extension to drive virtual users.
-type WebhookDispatcher struct {
+// UpdateDispatcher delivers Updates to a bot's webhook, or queues them for
+// polling when no webhook is configured.
+type UpdateDispatcher struct {
 	client      *http.Client
 	defaultURL  string // fallback if a bot never called setWebhook
 	logFailures bool
 	metrics     *Metrics // optional - instruments dispatch counts and duration
 }
 
-func NewWebhookDispatcher(defaultURL string) *WebhookDispatcher {
-	return &WebhookDispatcher{
+func NewUpdateDispatcher(defaultURL string) *UpdateDispatcher {
+	return &UpdateDispatcher{
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 			Transport: &http.Transport{
@@ -35,17 +35,29 @@ func NewWebhookDispatcher(defaultURL string) *WebhookDispatcher {
 	}
 }
 
-// Deliver posts the update to the bot's webhook. Returns the bot's HTTP
-// status and any error so callers can surface delivery problems to the test
-// runner instead of swallowing them.
-func (d *WebhookDispatcher) Deliver(ctx context.Context, bot *botEntry, upd Update) (int, error) {
-	url, secret := bot.Webhook()
-	if url == "" {
+func (d *UpdateDispatcher) target(bot *botEntry) (url, secret string) {
+	bot.msgMu.RLock()
+	defer bot.msgMu.RUnlock()
+	url, secret = bot.webhookURL, bot.secretToken
+	// An explicit webhook deletion disables the configured default as well.
+	if !bot.webhookSet {
 		url = d.defaultURL
 	}
+	return url, secret
+}
+
+func (d *UpdateDispatcher) hasTarget(bot *botEntry) bool {
+	url, _ := d.target(bot)
+	return url != ""
+}
+
+// Deliver posts the update to the bot's webhook and returns its HTTP status,
+// or queues it for getUpdates and returns zero.
+func (d *UpdateDispatcher) Deliver(ctx context.Context, bot *botEntry, upd Update) (int, error) {
+	url, secret := d.target(bot)
 	if url == "" {
-		d.observe("no_url", 0)
-		return 0, fmt.Errorf("no webhook URL set for bot (call setWebhook or set TELEGYM_MOCK_DEFAULT_WEBHOOK)")
+		bot.updates.Enqueue(upd)
+		return 0, nil
 	}
 
 	body, err := json.Marshal(upd)
@@ -88,7 +100,7 @@ func (d *WebhookDispatcher) Deliver(ctx context.Context, bot *botEntry, upd Upda
 	return resp.StatusCode, nil
 }
 
-func (d *WebhookDispatcher) observe(result string, dur time.Duration) {
+func (d *UpdateDispatcher) observe(result string, dur time.Duration) {
 	if d.metrics == nil {
 		return
 	}

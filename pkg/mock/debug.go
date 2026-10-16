@@ -134,7 +134,7 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 		return
 	}
 
-	status, err := h.WebhookDispatcher.Deliver(c.Request.Context(), bot, upd)
+	status, err := h.UpdateDispatcher.Deliver(c.Request.Context(), bot, upd)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{
 			"ok":              false,

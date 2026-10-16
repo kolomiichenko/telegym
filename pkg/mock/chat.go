@@ -45,13 +45,13 @@ var chatTemplates = template.Must(
 )
 
 // chatHandlers holds dependencies the UI needs (store for messages,
-// dispatcher for delivering injected updates to the bot's webhook).
+// dispatcher for delivering injected updates).
 type chatHandlers struct {
 	store      *Store
-	dispatcher *WebhookDispatcher
+	dispatcher *UpdateDispatcher
 }
 
-func newChatHandlers(s *Store, d *WebhookDispatcher) *chatHandlers {
+func newChatHandlers(s *Store, d *UpdateDispatcher) *chatHandlers {
 	return &chatHandlers{store: s, dispatcher: d}
 }
 

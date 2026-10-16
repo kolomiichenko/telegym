@@ -34,8 +34,8 @@ type Server struct {
 // in tests.
 func New(cfg Config) *Server {
 	store := NewStore()
-	disp := NewWebhookDispatcher(cfg.DefaultWebhookURL)
-	h := &Handlers{Store: store, WebhookDispatcher: disp}
+	disp := NewUpdateDispatcher(cfg.DefaultWebhookURL)
+	h := &Handlers{Store: store, UpdateDispatcher: disp}
 
 	if !cfg.Quiet {
 		gin.SetMode(gin.DebugMode)
@@ -212,6 +212,10 @@ func parseBotPath(p string) (token, method string, ok bool) {
 }
 
 func (s *Server) registerBotAPI(g *gin.RouterGroup) {
+	// Long polling
+	g.GET("/getUpdates", s.withBot(s.handlers.GetUpdates))
+	g.POST("/getUpdates", s.withBot(s.handlers.GetUpdates))
+
 	// Methods that return Message (or Update side-effect)
 	g.POST("/sendMessage", s.withBot(s.handlers.SendMessage))
 	g.POST("/sendPhoto", s.withBot(s.handlers.SendPhoto))
