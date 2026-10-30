@@ -96,6 +96,14 @@ func toString(v any) string {
 	return ""
 }
 
+// rawJSON reads a structured parameter from JSON or a JSON-encoded form field.
+func rawJSON(v any) ([]byte, error) {
+	if s, ok := v.(string); ok {
+		return []byte(s), nil
+	}
+	return json.Marshal(v)
+}
+
 func parseReplyMarkup(v any) *ReplyMarkup {
 	if v == nil {
 		return nil

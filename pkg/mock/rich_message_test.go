@@ -1,7 +1,9 @@
 package mock
 
 import (
+	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +33,7 @@ func TestSendRichMessageValidation(t *testing.T) {
 		{"missing rich_message", `{"chat_id":42}`, http.StatusBadRequest},
 		{"missing chat_id", `{"rich_message":{"html":"<p>a</p>"}}`, http.StatusBadRequest},
 		{"malformed body", `{"chat_id":`, http.StatusBadRequest},
+		{"malformed reply parameters", `{"chat_id":42,"rich_message":{"html":"hi"},"reply_parameters":"{"}`, http.StatusBadRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -49,8 +52,9 @@ func TestSendRichMessageResult(t *testing.T) {
 		`{"chat_id":42,"rich_message":{"blocks":[{"type":"paragraph","text":"hi"}],"is_rtl":true}}`)
 	var env struct {
 		Result struct {
-			MessageID   int `json:"message_id"`
-			RichMessage struct {
+			MessageID      int      `json:"message_id"`
+			ReplyToMessage *Message `json:"reply_to_message"`
+			RichMessage    struct {
 				Blocks []map[string]any `json:"blocks"`
 				IsRTL  bool             `json:"is_rtl"`
 			} `json:"rich_message"`
@@ -59,13 +63,78 @@ func TestSendRichMessageResult(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatal(err)
 	}
-	if env.Result.MessageID == 0 || len(env.Result.RichMessage.Blocks) != 1 || !env.Result.RichMessage.IsRTL {
+	if env.Result.MessageID == 0 || len(env.Result.RichMessage.Blocks) != 1 || !env.Result.RichMessage.IsRTL || env.Result.ReplyToMessage != nil {
 		t.Fatalf("unexpected result %s", rec.Body.String())
 	}
 
 	rec = doRichTestPOST(t, srv, "/bot741:rich/sendRichMessage", `{"chat_id":42,"rich_message":{"html":"<p>hi</p>"}}`)
 	if !strings.Contains(rec.Body.String(), `"rich_message":{"blocks":[]}`) {
 		t.Fatalf("html input must return an empty block list, got %s", rec.Body.String())
+	}
+}
+
+func TestSendRichMessageReply(t *testing.T) {
+	for _, format := range []string{"json", "multipart"} {
+		t.Run(format, func(t *testing.T) {
+			const token = "741:rich"
+			srv := New(Config{Quiet: true})
+			body := bytes.NewBufferString(`{"chat_id":42,"rich_message":{"html":"hi"},"reply_parameters":{"message_id":910001}}`)
+			contentType := "application/json"
+			if format == "multipart" {
+				body.Reset()
+				w := multipart.NewWriter(body)
+				for key, value := range map[string]string{
+					"chat_id":          "42",
+					"rich_message":     `{"html":"hi"}`,
+					"reply_parameters": `{"message_id":910001}`,
+				} {
+					if err := w.WriteField(key, value); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+				contentType = w.FormDataContentType()
+			}
+			req := httptest.NewRequest(http.MethodPost, "/bot"+token+"/sendRichMessage", body)
+			req.Header.Set("Content-Type", contentType)
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			var response struct {
+				Result Message `json:"result"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			assertRichReply(t, response.Result)
+
+			rec = httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/messages/"+token+"?chat_id=42", nil))
+			var history struct {
+				Messages []Message `json:"messages"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &history); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusOK || len(history.Messages) != 1 {
+				t.Fatalf("unexpected history: status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			assertRichReply(t, history.Messages[0])
+		})
+	}
+}
+
+func assertRichReply(t *testing.T, message Message) {
+	t.Helper()
+	if message.RichMessage == nil || message.ReplyToMessage == nil {
+		t.Fatalf("missing rich message or reply: %+v", message)
+	}
+	if reply := message.ReplyToMessage; reply.MessageID != 910001 || reply.Chat.ID != 42 {
+		t.Fatalf("unexpected reply target: %+v", reply)
 	}
 }
 
