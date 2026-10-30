@@ -369,15 +369,12 @@ func (h *Handlers) sendMedia(c *gin.Context, bot *botEntry, kind string) {
 	// If this was a multipart upload, capture the actual bytes into the
 	// FileStore so telegym-proxy can later forward the real file to Telegram.
 	// For file_id-only requests (cached), we keep the existing fake ID.
-	fileID, err := h.captureUploadedFile(c, kind)
+	file, err := h.captureUploadedFile(c, kind, kind)
 	if err != nil {
-		if errors.Is(err, errUploadTooLarge) || errors.Is(err, errFileStoreTooSmall) {
-			errResp(c, http.StatusRequestEntityTooLarge, "Request Entity Too Large: "+err.Error())
-			return
-		}
-		errResp(c, http.StatusBadRequest, "Bad Request: "+err.Error())
+		respondUploadError(c, err)
 		return
 	}
+	fileID := file.ID
 	if fileID == "" {
 		// Fall back to whatever was passed in the body as file reference,
 		// or a fresh fake ID if nothing was provided.
@@ -411,48 +408,6 @@ func (h *Handlers) sendMedia(c *gin.Context, bot *botEntry, kind string) {
 	}
 	bot.AppendMessage(m)
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
-}
-
-var (
-	errUploadTooLarge    = errors.New("uploaded file exceeds 50 MB")
-	errFileStoreTooSmall = errors.New("uploaded file exceeds file store capacity")
-)
-
-// captureUploadedFile stores the named multipart file and returns its file_id.
-// It returns an empty ID when no file was uploaded, or an error if capture fails.
-func (h *Handlers) captureUploadedFile(c *gin.Context, fieldName string) (string, error) {
-	ct := c.GetHeader("Content-Type")
-	if !strings.HasPrefix(ct, "multipart/form-data") {
-		return "", nil
-	}
-	fileHdr, err := c.FormFile(fieldName)
-	if errors.Is(err, http.ErrMissingFile) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	src, err := fileHdr.Open()
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = src.Close() }()
-	const maxFile = 50 * 1024 * 1024 // 50 MB per file
-	limit := min(int64(maxFile), h.Store.Files.maxBytes)
-	data, err := io.ReadAll(io.LimitReader(src, limit+1))
-	if err != nil {
-		return "", err
-	}
-	if len(data) > maxFile {
-		return "", errUploadTooLarge
-	}
-	// Reject before Put: an upload larger than capacity would evict the
-	// existing files and itself, leaving the client with an unusable ID.
-	if int64(len(data)) > h.Store.Files.maxBytes {
-		return "", errFileStoreTooSmall
-	}
-	ctype := fileHdr.Header.Get("Content-Type")
-	return h.Store.Files.Put(fieldName, ctype, fileHdr.Filename, data), nil
 }
 
 func (h *Handlers) SendPhoto(c *gin.Context, b *botEntry)     { h.sendMedia(c, b, "photo") }

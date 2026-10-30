@@ -13,9 +13,8 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// RichMessage is Message.rich_message. Blocks are kept as the JSON the
-// bot sent; the mock does not parse html/markdown input into blocks, so
-// messages sent that way come back with an empty block list.
+// RichMessage is Message.rich_message. The mock does not parse html/markdown
+// input into blocks, so those formats come back with an empty block list.
 type RichMessage struct {
 	Blocks []json.RawMessage `json:"blocks"`
 	IsRTL  bool              `json:"is_rtl,omitempty"`
@@ -25,8 +24,8 @@ type RichMessage struct {
 	Markdown string `json:"-"`
 }
 
-// SendRichMessage stores a rich message (Bot API 10.3) so the debug chat
-// can render its html or blocks. Media uploads are not captured.
+// SendRichMessage stores a rich message (Bot API 10.3), capturing uploaded
+// block media and converting input media into response objects.
 func (h *Handlers) SendRichMessage(c *gin.Context, bot *botEntry) {
 	body, err := readBody(c)
 	if err != nil {
@@ -63,6 +62,10 @@ func (h *Handlers) SendRichMessage(c *gin.Context, bot *botEntry) {
 	}
 	if set != 1 {
 		errResp(c, http.StatusBadRequest, "Bad Request: exactly one of rich_message.html, rich_message.markdown or rich_message.blocks must be specified")
+		return
+	}
+	if err := h.resolveRichMedia(c, in.Blocks); err != nil {
+		respondUploadError(c, err)
 		return
 	}
 
