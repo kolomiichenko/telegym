@@ -22,6 +22,9 @@
     .msg { max-width: 75%; padding: 0.5rem 0.75rem; border-radius: 12px; word-wrap: break-word; }
     .msg.bot { background: #fff; align-self: flex-start; border-bottom-left-radius: 2px; }
     .msg.user { background: #2a7fff; color: #fff; align-self: flex-end; border-bottom-right-radius: 2px; }
+    /* Telegram keeps runs of spaces in text and parse_mode=HTML bodies; rich HTML collapses them. */
+    .msg-text { white-space: pre-wrap; }
+    .msg-text .rich { white-space: normal; }
     .msg .ts { display: block; font-size: 0.7rem; color: #999; margin-top: 0.2rem; font-family: ui-monospace, monospace; }
     .msg.user .ts { color: rgba(255,255,255,0.7); }
     /* sendChatAction status ("typing…"), shown until the bot's next message. */
