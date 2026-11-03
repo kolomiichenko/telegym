@@ -130,6 +130,7 @@ jobs:
           sha256sum -- * > checksums.txt
           # A draft, so the maintainer adds the title, summary and thanks to
           # contributors on top of the generated notes before publishing.
+          # release-title.yml keeps the tag in front of the title.
           flags=(--draft --verify-tag --generate-notes)
           # v1.2.3-rc.1 and similar are pre-releases, never "Latest".
           [[ "$TAG" == *-* ]] && flags+=(--prerelease)

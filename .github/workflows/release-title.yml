@@ -1,0 +1,28 @@
+name: Release title
+
+# Release titles read "vX.Y.Z Summary". The draft from release.yml is titled
+# with the bare tag, and the maintainer replaces it with a summary before
+# publishing, so put the tag back in front whenever it is missing. Draft
+# releases fire no events, so this runs on publish and on later edits; its
+# own edit uses GITHUB_TOKEN and does not trigger it again.
+on:
+  release:
+    types: [published, edited]
+
+permissions:
+  contents: write
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prefix the title with the tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          TITLE: ${{ github.event.release.name }}
+        run: |
+          if [[ "$TITLE" == "$TAG" || "$TITLE" == "$TAG "* ]]; then
+            exit 0
+          fi
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG${TITLE:+ $TITLE}"
