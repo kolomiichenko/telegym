@@ -102,21 +102,36 @@ func TestDebugChatRendersHTMLOnlyForParseModeHTML(t *testing.T) {
 	send("sendMessage", `{"chat_id":42,"text":"plain <b>x with /help"}`)
 	send("sendMessage", `{"chat_id":42,"text":"*md* <i>not html","parse_mode":"MarkdownV2"}`)
 	send("sendPhoto", `{"chat_id":42,"photo":"file-1","caption":"<i>caption html</i>","parse_mode":"HTML"}`)
+	// Telegram keeps runs of spaces in text and HTML bodies; rich HTML collapses them.
+	send("sendMessage", `{"chat_id":42,"text":"Column 1      Column 2\n 1   She sees me."}`)
+	send("sendMessage", `{"chat_id":42,"text":"<b>N</b>      V","parse_mode":"HTML"}`)
+	send("sendRichMessage", `{"chat_id":42,"rich_message":{"html":"<p>rich\n   text</p>"}}`)
 
-	rec := httptest.NewRecorder()
-	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/debug/chat/"+token+"/42/messages", nil))
-	body := rec.Body.String()
-	for _, want := range []string{
+	expect := func(path string, wants ...string) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		body := rec.Body.String()
+		for _, want := range wants {
+			if !strings.Contains(body, want) {
+				t.Errorf("missing %q in %s:\n%s", want, path, body)
+			}
+		}
+	}
+	expect("/debug/chat/"+token+"/42/messages",
 		"<b>bold html</b>",
 		"plain &lt;b&gt;x with",
 		`<a class="cmd"`,
 		"&lt;i&gt;not html",
 		"<i>caption html</i>",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("missing %q in debug chat:\n%s", want, body)
-		}
-	}
+		`<div class="msg-text">Column 1      Column 2<br> 1   She sees me.</div>`,
+		`<div class="msg-text"><b>N</b>      V</div>`,
+		`<div class="msg-text"><div class="rich">`,
+	)
+	expect("/debug/chat/"+token+"/42",
+		".msg-text { white-space: pre-wrap; }",
+		".msg-text .rich { white-space: normal; }",
+	)
 }
 
 func BenchmarkRenderTelegramHTML(b *testing.B) {
