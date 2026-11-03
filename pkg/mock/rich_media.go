@@ -16,10 +16,26 @@ type richMediaResolver struct {
 	h     *Handlers
 	c     *gin.Context
 	count int
+	// uploads caches captured parts by name, so a part referenced by
+	// several blocks is stored once.
+	uploads map[string]inputFile
 }
 
+// resolveRichMedia replaces block input media with response objects. On
+// error it drops the uploads it already stored, so a rejected message
+// leaves nothing behind in the FileStore.
 func (h *Handlers) resolveRichMedia(c *gin.Context, blocks []json.RawMessage) error {
-	r := richMediaResolver{h: h, c: c}
+	r := richMediaResolver{h: h, c: c, uploads: map[string]inputFile{}}
+	if err := r.resolveBlocks(blocks); err != nil {
+		for _, file := range r.uploads {
+			h.Store.Files.delete(file.ID)
+		}
+		return err
+	}
+	return nil
+}
+
+func (r *richMediaResolver) resolveBlocks(blocks []json.RawMessage) error {
 	for i, raw := range blocks {
 		var block any
 		if err := json.Unmarshal(raw, &block); err != nil {
@@ -74,7 +90,7 @@ func (r *richMediaResolver) resolveMedia(block map[string]any, kind string) erro
 	if r.count > maxRichMessageMedia {
 		return fmt.Errorf("rich message can contain at most %d media", maxRichMessageMedia)
 	}
-	file, err := r.h.resolveInputFile(r.c, kind, reference)
+	file, err := r.inputFile(kind, reference)
 	if err != nil {
 		return err
 	}
@@ -82,7 +98,7 @@ func (r *richMediaResolver) resolveMedia(block map[string]any, kind string) erro
 	return nil
 }
 
-func (h *Handlers) resolveInputFile(c *gin.Context, kind, reference string) (inputFile, error) {
+func (r *richMediaResolver) inputFile(kind, reference string) (inputFile, error) {
 	partName, attached := strings.CutPrefix(reference, "attach://")
 	if !attached {
 		return inputFile{ID: reference}, nil
@@ -90,13 +106,17 @@ func (h *Handlers) resolveInputFile(c *gin.Context, kind, reference string) (inp
 	if partName == "" {
 		return inputFile{}, fmt.Errorf("empty attach reference")
 	}
-	file, err := h.captureUploadedFile(c, kind, partName)
+	if file, ok := r.uploads[partName]; ok {
+		return file, nil
+	}
+	file, err := r.h.captureUploadedFile(r.c, kind, partName)
 	if err != nil {
 		return inputFile{}, err
 	}
 	if file.ID == "" {
 		return inputFile{}, fmt.Errorf("multipart attachment %q not found", partName)
 	}
+	r.uploads[partName] = file
 	return file, nil
 }
 

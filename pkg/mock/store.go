@@ -402,6 +402,30 @@ func (b *botEntry) ForumTopics(chatID int64) []ForumTopic {
 	return append([]ForumTopic(nil), b.topics[chatID]...)
 }
 
+// replyTarget builds reply_to_message for m replying to messageID in the
+// same chat. It uses the original stored send (edits are stored as partial
+// revisions) without its own reply, as Telegram does not nest replies. The
+// store holds only bot messages, so replies to user messages, or to ones
+// evicted from the buffer, get a stub with the ID instead of an error.
+func (b *botEntry) replyTarget(m Message, messageID int) *Message {
+	if messageID == 0 {
+		return nil
+	}
+	if l := b.existingChat(m.Chat.ID); l != nil {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		for _, stored := range newest(l.msgs, b.maxMessages) {
+			if stored.MessageID == messageID {
+				stored.ReplyToMessage = nil
+				stored.EventSeq = 0
+				stored.isNew = false
+				return &stored
+			}
+		}
+	}
+	return &Message{MessageID: messageID, Chat: m.Chat, Date: m.Date}
+}
+
 // DeleteMessage removes every stored entry for chatID+messageID, including
 // earlier edit revisions, so the bubble disappears from /debug/chat.
 // Returns false when nothing matched (e.g. a user message or an entry

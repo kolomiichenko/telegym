@@ -59,26 +59,21 @@ func (h *Handlers) SendRichMessage(c *gin.Context, bot *botEntry) {
 		errResp(c, http.StatusBadRequest, "Bad Request: exactly one of rich_message.html, rich_message.markdown or rich_message.blocks must be specified")
 		return
 	}
-	if err := h.resolveRichMedia(c, in.Blocks); err != nil {
-		respondUploadError(c, err)
+	// Validate before resolving media, which stores uploads.
+	replyTo, err := replyToMessageID(body)
+	if err != nil {
+		errResp(c, http.StatusBadRequest, "Bad Request: "+err.Error())
 		return
 	}
-
-	var reply struct {
-		MessageID int `json:"message_id"`
-	}
-	enc, err = rawJSON(body["reply_parameters"])
-	if err != nil || json.Unmarshal(enc, &reply) != nil {
-		errResp(c, http.StatusBadRequest, "Bad Request: invalid reply_parameters")
+	if err := h.resolveRichMedia(c, in.Blocks); err != nil {
+		respondUploadError(c, err)
 		return
 	}
 
 	m := h.newBotMessage(bot, chatID)
 	m.ReplyMarkup = parseReplyMarkup(body["reply_markup"])
 	setMessageThread(&m, body)
-	if reply.MessageID != 0 {
-		m.ReplyToMessage = &Message{MessageID: reply.MessageID, Chat: m.Chat, Date: m.Date}
-	}
+	m.ReplyToMessage = bot.replyTarget(m, replyTo)
 	blocks := in.Blocks
 	if blocks == nil {
 		blocks = []json.RawMessage{}
