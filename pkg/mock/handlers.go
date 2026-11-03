@@ -104,6 +104,18 @@ func rawJSON(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
+// replyToMessageID reads reply_parameters.message_id; zero means no reply.
+func replyToMessageID(body map[string]any) (int, error) {
+	var reply struct {
+		MessageID int `json:"message_id"`
+	}
+	enc, err := rawJSON(body["reply_parameters"])
+	if err != nil || json.Unmarshal(enc, &reply) != nil {
+		return 0, errors.New("invalid reply_parameters")
+	}
+	return reply.MessageID, nil
+}
+
 func parseReplyMarkup(v any) *ReplyMarkup {
 	if v == nil {
 		return nil
@@ -219,8 +231,14 @@ func (h *Handlers) SendMessage(c *gin.Context, bot *botEntry) {
 		errResp(c, 400, "Bad Request: chat_id is required")
 		return
 	}
+	replyTo, err := replyToMessageID(body)
+	if err != nil {
+		errResp(c, 400, "Bad Request: "+err.Error())
+		return
+	}
 
 	m := h.newBotMessage(bot, chatID)
+	m.ReplyToMessage = bot.replyTarget(m, replyTo)
 	m.Text = toString(body["text"])
 	m.Entities = parseEntities(body["entities"])
 	setMessageThread(&m, body)
@@ -366,7 +384,13 @@ func (h *Handlers) sendMedia(c *gin.Context, bot *botEntry, kind string) {
 		errResp(c, 400, "Bad Request: chat_id is required")
 		return
 	}
+	replyTo, err := replyToMessageID(body)
+	if err != nil {
+		errResp(c, 400, "Bad Request: "+err.Error())
+		return
+	}
 	m := h.newBotMessage(bot, chatID)
+	m.ReplyToMessage = bot.replyTarget(m, replyTo)
 	m.Caption = toString(body["caption"])
 	m.Text = m.Caption
 	setMessageThread(&m, body)
@@ -438,8 +462,14 @@ func (h *Handlers) SendDice(c *gin.Context, bot *botEntry) {
 	// tests, a deterministic-ish value derived from time is fine and avoids
 	// pulling in math/rand state contention.
 	value := int(time.Now().UnixNano()%6) + 1
+	replyTo, err := replyToMessageID(body)
+	if err != nil {
+		errResp(c, 400, "Bad Request: "+err.Error())
+		return
+	}
 
 	m := h.newBotMessage(bot, chatID)
+	m.ReplyToMessage = bot.replyTarget(m, replyTo)
 	m.Dice = &Dice{Emoji: emoji, Value: value}
 	setMessageThread(&m, body)
 	bot.AppendMessage(m)
