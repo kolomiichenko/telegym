@@ -44,14 +44,9 @@ func (h *Handlers) SendRichMessage(c *gin.Context, bot *botEntry) {
 		Markdown string            `json:"markdown"`
 		IsRTL    bool              `json:"is_rtl"`
 	}
-	// readBody returns form fields as strings and JSON bodies as decoded
-	// values; re-marshal so both shapes decode the same way.
 	raw := body["rich_message"]
-	if str, ok := raw.(string); ok {
-		raw = json.RawMessage(str)
-	}
-	enc, _ := json.Marshal(raw)
-	if raw == nil || json.Unmarshal(enc, &in) != nil {
+	enc, err := rawJSON(raw)
+	if raw == nil || err != nil || json.Unmarshal(enc, &in) != nil {
 		errResp(c, http.StatusBadRequest, "Bad Request: rich_message is required")
 		return
 	}
@@ -66,9 +61,21 @@ func (h *Handlers) SendRichMessage(c *gin.Context, bot *botEntry) {
 		return
 	}
 
+	var reply struct {
+		MessageID int `json:"message_id"`
+	}
+	enc, err = rawJSON(body["reply_parameters"])
+	if err != nil || json.Unmarshal(enc, &reply) != nil {
+		errResp(c, http.StatusBadRequest, "Bad Request: invalid reply_parameters")
+		return
+	}
+
 	m := h.newBotMessage(bot, chatID)
 	m.ReplyMarkup = parseReplyMarkup(body["reply_markup"])
 	setMessageThread(&m, body)
+	if reply.MessageID != 0 {
+		m.ReplyToMessage = &Message{MessageID: reply.MessageID, Chat: m.Chat, Date: m.Date}
+	}
 	blocks := in.Blocks
 	if blocks == nil {
 		blocks = []json.RawMessage{}
