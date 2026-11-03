@@ -158,6 +158,9 @@ type Video struct {
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
 	Duration     int    `json:"duration"`
+	FileName     string `json:"file_name,omitempty"`
+	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 type Animation struct {
@@ -166,6 +169,9 @@ type Animation struct {
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
 	Duration     int    `json:"duration"`
+	FileName     string `json:"file_name,omitempty"`
+	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 type Sticker struct {
