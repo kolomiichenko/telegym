@@ -20,6 +20,7 @@ type Store struct {
 	eventSeq      atomic.Int64
 	updateIDSeed  atomic.Int64
 	requestIDSeed atomic.Int64
+	queryIDSeed   atomic.Int64
 
 	// messageIDBase seeds every chat's message_id counter (see newChatLog).
 	messageIDBase int64
@@ -267,6 +268,10 @@ func (s *Store) NextMessageID() int { return int(s.messageIDSeed.Add(1)) }
 func (s *Store) NextEventSeq() int64 { return s.eventSeq.Add(1) }
 
 func (s *Store) NextUpdateID() int64 { return s.updateIDSeed.Add(1) }
+
+// NextQueryID returns a unique ID for an injected inline or pre-checkout
+// query, or a payment charge.
+func (s *Store) NextQueryID() string { return strconv.FormatInt(s.queryIDSeed.Add(1), 10) }
 
 // chat returns the log of chatID, creating it on first use.
 func (b *botEntry) chat(chatID int64) *chatLog {

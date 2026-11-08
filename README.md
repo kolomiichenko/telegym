@@ -236,6 +236,43 @@ u.click('age_verify');               // inject a callback query
 Returned `Message` objects expose `.text`, `.replyMarkup`, `.latencyMs`, and a
 `.findButton(pattern)` helper for extracting specific buttons.
 
+Other things a user can do:
+
+```js
+u.blockBot();                         // my_chat_member, also u.unblockBot()
+const q = u.inlineQuery('cats');      // returns the inline_query_id
+u.chooseInlineResult('result-1', 'cats');
+const p = u.preCheckout('order-1', 150); // returns the pre_checkout_query_id
+u.pay('order-1', 150);                // successful_payment; currency defaults to XTR
+u.react('👍');                         // on the most recently matched bot message
+u.answerPoll('poll-1', [0, 2]);       // no options retracts the vote
+u.sendPhoto('file-id', 'caption');
+u.sendDocument('file-id', 'cv.pdf', 'caption');
+u.sendContact('+380501234567');
+u.sendLocation(50.45, 30.52);
+u.sendSticker('file-id', '🔥');
+```
+
+From anything other than k6, `POST /debug/inject/update` takes the same updates.
+Every request needs `token` and `chat_id` or `user_id`; `type` defaults to
+`message`:
+
+| `type` | Fields |
+|---|---|
+| `message`, `edited_message` | `text`, or one of `photo`, `document`, `contact`, `location`, `sticker` in Bot API shape; `caption` for photo and document |
+| `callback_query` | `callback_data`, `message_id` |
+| `chat_member`, `my_chat_member` | `old_status`, `new_status`: `member`, `left` or `kicked` |
+| `inline_query` | `query`, `offset` |
+| `chosen_inline_result` | `result_id` (required), `query` |
+| `pre_checkout_query`, `successful_payment` | `total_amount`, `invoice_payload` (both required), `currency` (default `XTR`) |
+| `message_reaction` | `message_id` (required), `old_reaction`, `new_reaction`: arrays of emoji |
+| `poll_answer` | `poll_id` (required), `option_ids` |
+
+The response includes `callback_query_id`, `inline_query_id` or
+`pre_checkout_query_id` when the update has one. Injected `file_id`s are only
+references: `getFile` answers with a zero-value `File`, because the mock has no
+bytes for them.
+
 ## User pools (two-phase scenarios)
 
 For scenarios where one run registers users and a later run replays them
@@ -259,8 +296,9 @@ tg.clearRequests();             // empties the journal for every VU
 
 `awaitRequest` returns `.seq`, `.method`, `.parameters`, `.status`, `.at` and
 `.latencyMs`, and each call only once per user. The journal is per bot, so
-calls carrying another user's `chat_id` or `callback_query_id` never match;
-calls with neither, such as `getMe`, match any user. It includes calls the mock
+calls carrying another user's `chat_id`, `callback_query_id`, `inline_query_id`
+or `pre_checkout_query_id` never match; calls with none of them, such as
+`getMe`, match any user. It includes calls the mock
 refused, such as `429`s, so check `.status`. Each poll reads a method's newest
 1000 calls, and it needs the journal on (`TELEGYM_MOCK_REQUEST_JOURNAL`).
 

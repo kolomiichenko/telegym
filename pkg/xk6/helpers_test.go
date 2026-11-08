@@ -2,6 +2,7 @@ package telegym
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,7 +36,8 @@ type fakeMock struct {
 	injectStatus int    // non-zero forces /debug/inject/update to fail
 	rawMessages  string // non-empty replaces the JSON body of /debug/messages
 
-	callbackID     string // returned by /debug/inject/update when non-empty
+	callbackID     string         // returned by /debug/inject/update when non-empty
+	injectFields   map[string]any // merged into the /debug/inject/update response
 	requests       []APIRequest
 	requestQueries []string
 	requestsStatus int // non-zero forces /debug/requests to fail
@@ -68,7 +70,9 @@ func (m *fakeMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "boom", m.injectStatus)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "callback_query_id": m.callbackID})
+		response := map[string]any{"ok": true, "callback_query_id": m.callbackID}
+		maps.Copy(response, m.injectFields)
+		_ = json.NewEncoder(w).Encode(response)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/debug/requests/"):
 		m.requestQueries = append(m.requestQueries, r.URL.RequestURI())
 		if m.requestsStatus != 0 {
