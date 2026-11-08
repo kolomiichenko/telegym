@@ -34,6 +34,12 @@ type fakeMock struct {
 	messages     []Message
 	injectStatus int    // non-zero forces /debug/inject/update to fail
 	rawMessages  string // non-empty replaces the JSON body of /debug/messages
+
+	callbackID     string // returned by /debug/inject/update when non-empty
+	requests       []APIRequest
+	requestQueries []string
+	requestsStatus int // non-zero forces /debug/requests to fail
+	cleared        int
 }
 
 func newFakeMock(t *testing.T) (*fakeMock, *Client) {
@@ -62,7 +68,23 @@ func (m *fakeMock) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "boom", m.injectStatus)
 			return
 		}
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "callback_query_id": m.callbackID})
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/debug/requests/"):
+		m.requestQueries = append(m.requestQueries, r.URL.RequestURI())
+		if m.requestsStatus != 0 {
+			http.Error(w, "boom", m.requestsStatus)
+			return
+		}
+		method := r.URL.Query().Get("method")
+		out := []APIRequest{}
+		for _, request := range m.requests {
+			if method == "" || request.Method == method {
+				out = append(out, request)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"requests": out})
+	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/debug/requests/") && strings.HasSuffix(r.URL.Path, "/clear"):
+		_ = json.NewEncoder(w).Encode(map[string]any{"cleared": m.cleared})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/debug/messages/"):
 		m.queries = append(m.queries, r.URL.RequestURI())
 		if m.rawMessages != "" {

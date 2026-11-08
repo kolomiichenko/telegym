@@ -1,8 +1,13 @@
 package telegym
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -52,15 +57,68 @@ func (c *Client) NewUser(chatID int64, vu modules.VU) *User {
 	if chatID == 0 {
 		chatID = c.allocateID(vu)
 	}
+	// Sub-second resolution would be ideal but telegym-mock dates are unix
+	// seconds. Subtract 1 so messages from this exact second are visible.
+	since := time.Now().Unix() - 1
 	return &User{
-		client: c,
-		vu:     vu,
-		ChatID: chatID,
-		UserID: chatID,
-		// Sub-second resolution would be ideal but telegym-mock dates are unix
-		// seconds. Subtract 1 so messages from this exact second are visible.
-		since: time.Now().Unix() - 1,
+		client:         c,
+		vu:             vu,
+		ChatID:         chatID,
+		UserID:         chatID,
+		since:          since,
+		requestsFrom:   since,
+		seenRequestSeq: make(map[string]int64),
+		callbackIDs:    make(map[string]struct{}),
 	}
+}
+
+// requests reads the newest journal entries, oldest first. An empty method
+// returns every method; limit 0 uses the mock's default.
+func (c *Client) requests(method string, limit int) ([]APIRequest, error) {
+	query := url.Values{}
+	if method != "" {
+		query.Set("method", method)
+	}
+	if limit > 0 {
+		query.Set("limit", strconv.Itoa(limit))
+	}
+	resp, err := c.http.Get(c.mockURL + "/debug/requests/" + c.token + "?" + query.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Requests []APIRequest `json:"requests"`
+	}
+	if err := decodeDebug(resp, &out); err != nil {
+		return nil, err
+	}
+	return out.Requests, nil
+}
+
+// clearRequests empties the bot's journal and returns how many calls it held.
+func (c *Client) clearRequests() (int, error) {
+	resp, err := c.http.Post(c.mockURL+"/debug/requests/"+c.token+"/clear", "application/json", nil)
+	if err != nil {
+		return 0, err
+	}
+	var out struct {
+		Cleared int `json:"cleared"`
+	}
+	if err := decodeDebug(resp, &out); err != nil {
+		return 0, err
+	}
+	return out.Cleared, nil
+}
+
+// decodeDebug closes resp after decoding its JSON body into out, turning a
+// non-2xx status into an error carrying the response body.
+func decodeDebug(resp *http.Response, out any) error {
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s: %d %s", resp.Request.URL.Path, resp.StatusCode, body)
+	}
+	return json.NewDecoder(resp.Body).Decode(out)
 }
 
 // allocateID derives an ID space per VU to avoid collisions across iterations

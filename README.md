@@ -236,6 +236,26 @@ file on disk, read via `SharedArray` so it loads once and is shared across
 all VUs.
 
 **Phase 1 - register** uses the only file-write helper the extension provides
+To assert on what the bot called rather than what it said, read the request
+journal:
+
+```js
+// Wait up to 5s for a matching call. Params are a subset of the call's
+// parameters, compared by value whether the bot sent JSON or a form.
+const r = u.awaitRequest('sendMessage', { parse_mode: 'HTML' }, 5);
+check(r, { accepted: (r) => r.status === 200 });
+
+tg.requests('sendMessage', 50); // newest calls, oldest first; '' for any method
+tg.clearRequests();             // empties the journal for every VU
+```
+
+`awaitRequest` returns `.seq`, `.method`, `.parameters`, `.status`, `.at` and
+`.latencyMs`, and each call only once per user. The journal is per bot, so
+calls carrying another user's `chat_id` or `callback_query_id` never match;
+calls with neither, such as `getMe`, match any user. It includes calls the mock
+refused, such as `429`s, so check `.status`. Each poll reads a method's newest
+1000 calls, and it needs the journal on (`TELEGYM_MOCK_REQUEST_JOURNAL`).
+
 (k6 itself doesn't allow file writes from VUs):
 
 ```js
