@@ -11,6 +11,95 @@ import (
 	"testing"
 )
 
+func TestSendMediaMultipartAttachments(t *testing.T) {
+	for kind, method := range map[string]string{
+		"photo":     "sendPhoto",
+		"video":     "sendVideo",
+		"animation": "sendAnimation",
+		"sticker":   "sendSticker",
+	} {
+		for _, tc := range []struct {
+			name, reference, part string
+			status                int
+		}{
+			{name: "direct", part: kind, status: http.StatusOK},
+			{name: "named", reference: "attach://upload", part: "upload", status: http.StatusOK},
+			{name: "missing", reference: "attach://missing", part: kind, status: http.StatusBadRequest},
+			{name: "empty", reference: "attach://", part: kind, status: http.StatusBadRequest},
+		} {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				srv := New(Config{Quiet: true})
+				const payload = "captured upload bytes"
+				var body bytes.Buffer
+				w := multipart.NewWriter(&body)
+				if err := w.WriteField("chat_id", "42"); err != nil {
+					t.Fatal(err)
+				}
+				if tc.reference != "" {
+					if err := w.WriteField(kind, tc.reference); err != nil {
+						t.Fatal(err)
+					}
+				}
+				part, err := w.CreateFormFile(tc.part, "media.bin")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := io.WriteString(part, payload); err != nil {
+					t.Fatal(err)
+				}
+				if err := w.Close(); err != nil {
+					t.Fatal(err)
+				}
+
+				req := httptest.NewRequest(http.MethodPost, "/bot741:upload/"+method, &body)
+				req.Header.Set("Content-Type", w.FormDataContentType())
+				rec := httptest.NewRecorder()
+				srv.Handler().ServeHTTP(rec, req)
+				if rec.Code != tc.status {
+					t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), tc.status)
+				}
+				if tc.status != http.StatusOK {
+					assertFileStats(t, srv, 0, 0)
+					if messages := srv.Store().Bot("741:upload").Messages(42, 100); len(messages) != 0 {
+						t.Fatalf("rejected attachment recorded messages: %+v", messages)
+					}
+					return
+				}
+
+				var response struct {
+					Result Message `json:"result"`
+				}
+				if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+					t.Fatal(err)
+				}
+				fileID := uploadedMediaID(t, response.Result)
+				file := httptest.NewRecorder()
+				srv.Handler().ServeHTTP(file, httptest.NewRequest(http.MethodGet, "/debug/files/"+fileID, nil))
+				if file.Code != http.StatusOK || file.Body.String() != payload {
+					t.Fatalf("upload not retained: status=%d body=%q", file.Code, file.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func uploadedMediaID(t *testing.T, message Message) string {
+	t.Helper()
+	switch {
+	case len(message.Photo) > 0:
+		return message.Photo[0].FileID
+	case message.Video != nil:
+		return message.Video.FileID
+	case message.Animation != nil:
+		return message.Animation.FileID
+	case message.Sticker != nil:
+		return message.Sticker.FileID
+	default:
+		t.Fatalf("response has no media: %+v", message)
+		return ""
+	}
+}
+
 func TestSendMediaUploadSizeLimit(t *testing.T) {
 	const maxFile = 50 * 1024 * 1024
 	for _, tc := range []struct {
