@@ -31,11 +31,39 @@ type InjectUpdateRequest struct {
 	// Callback-shaped update
 	CallbackData string `json:"callback_data"`
 
-	// Chat-member-shaped update. ActorID defaults to the affected user.
-	// Only member and left statuses are supported.
+	// Chat-member-shaped update, for chat_member and my_chat_member. ActorID
+	// defaults to the affected user and applies to chat_member only. Only
+	// member, left and kicked statuses are supported.
 	ActorID   int64  `json:"actor_id"`
 	OldStatus string `json:"old_status"`
 	NewStatus string `json:"new_status"`
+
+	// Media for message and edited_message; at most one of them. Files are
+	// references only: the mock holds no bytes for these file_ids.
+	Caption  string      `json:"caption"`
+	Photo    []PhotoSize `json:"photo"`
+	Document *Document   `json:"document"`
+	Contact  *Contact    `json:"contact"`
+	Location *Location   `json:"location"`
+	Sticker  *Sticker    `json:"sticker"`
+
+	// Inline-shaped updates. ResultID is for chosen_inline_result.
+	Query    string `json:"query"`
+	Offset   string `json:"offset"`
+	ResultID string `json:"result_id"`
+
+	// Payment-shaped updates. Currency defaults to XTR (Telegram Stars).
+	Currency       string `json:"currency"`
+	TotalAmount    int    `json:"total_amount"`
+	InvoicePayload string `json:"invoice_payload"`
+
+	// Reaction-shaped update: emoji reactions on MessageID.
+	OldReaction []string `json:"old_reaction"`
+	NewReaction []string `json:"new_reaction"`
+
+	// Poll-answer-shaped update. Empty OptionIDs retracts the vote.
+	PollID    string `json:"poll_id"`
+	OptionIDs []int  `json:"option_ids"`
 }
 
 func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
@@ -71,6 +99,11 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 
 	from := User{ID: req.UserID, IsBot: false, FirstName: req.FirstName, Username: req.Username}
 	chat := Chat{ID: req.ChatID, Type: req.ChatType, Title: req.ChatTitle}
+	userChat := chat // the chat as seen in updates the user originates
+	if chat.Type == "private" {
+		userChat.FirstName = req.FirstName
+		userChat.Username = req.Username
+	}
 	var upd Update // UpdateID is assigned on delivery
 
 	switch req.Type {
@@ -93,10 +126,6 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 		// to the correct chat for the debug UI.
 		bot.RegisterCallback(cbID, req.ChatID)
 	case "message", "edited_message":
-		if chat.Type == "private" {
-			chat.FirstName = req.FirstName
-			chat.Username = req.Username
-		}
 		messageID := req.MessageID
 		if req.Type == "message" || messageID == 0 {
 			messageID = bot.NextMessageID(chat.ID)
@@ -105,8 +134,12 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 			MessageID: messageID,
 			From:      &from,
 			Date:      time.Now().Unix(),
-			Chat:      chat,
+			Chat:      userChat,
 			Text:      req.Text,
+		}
+		if err := attachMedia(message, &req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
 		}
 		if req.Type == "edited_message" {
 			upd.EditedMessage = message
@@ -115,7 +148,7 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 		}
 	case "chat_member":
 		if !supportedMemberStatus(req.OldStatus) || !supportedMemberStatus(req.NewStatus) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "old_status and new_status must be member or left"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "old_status and new_status must be member, left or kicked"})
 			return
 		}
 		actor := from
@@ -126,12 +159,14 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 			Chat:          chat,
 			From:          actor,
 			Date:          time.Now().Unix(),
-			OldChatMember: ChatMember{Status: req.OldStatus, User: from},
-			NewChatMember: ChatMember{Status: req.NewStatus, User: from},
+			OldChatMember: chatMemberWithStatus(from, req.OldStatus),
+			NewChatMember: chatMemberWithStatus(from, req.NewStatus),
 		}
 	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "unsupported update type"})
-		return
+		if err := h.fillUpdate(&upd, bot, &req, from, userChat); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
 	}
 
 	res, err := h.UpdateDispatcher.DeliverUpdate(c.Request.Context(), bot, upd)
@@ -153,12 +188,26 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 	if upd.CallbackQuery != nil {
 		resp["callback_query_id"] = upd.CallbackQuery.ID
 	}
+	if upd.InlineQuery != nil {
+		resp["inline_query_id"] = upd.InlineQuery.ID
+	}
+	if upd.PreCheckoutQuery != nil {
+		resp["pre_checkout_query_id"] = upd.PreCheckoutQuery.ID
+	}
 	c.JSON(http.StatusOK, resp)
 }
 
 func supportedMemberStatus(status string) bool {
 	// Other member variants require fields the injection API cannot supply.
-	return status == "member" || status == "left"
+	return status == "member" || status == "left" || status == "kicked"
+}
+
+func chatMemberWithStatus(user User, status string) ChatMember {
+	member := ChatMember{Status: status, User: user}
+	if status == "kicked" {
+		member.UntilDate = new(int64)
+	}
+	return member
 }
 
 // DebugListMessages returns outbound messages stored for a bot, optionally

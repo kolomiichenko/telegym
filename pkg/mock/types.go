@@ -64,6 +64,11 @@ type Message struct {
 	Animation *Animation  `json:"animation,omitempty"`
 	Sticker   *Sticker    `json:"sticker,omitempty"`
 	Dice      *Dice       `json:"dice,omitempty"`
+	Document  *Document   `json:"document,omitempty"`
+	Contact   *Contact    `json:"contact,omitempty"`
+	Location  *Location   `json:"location,omitempty"`
+
+	SuccessfulPayment *SuccessfulPayment `json:"successful_payment,omitempty"`
 
 	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
 	RichMessage       *RichMessage       `json:"rich_message,omitempty"`
@@ -190,6 +195,35 @@ type Dice struct {
 	Value int    `json:"value"`
 }
 
+type Document struct {
+	FileID       string `json:"file_id"`
+	FileUniqueID string `json:"file_unique_id"`
+	FileName     string `json:"file_name,omitempty"`
+	MimeType     string `json:"mime_type,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
+}
+
+type Contact struct {
+	PhoneNumber string `json:"phone_number"`
+	FirstName   string `json:"first_name"`
+	LastName    string `json:"last_name,omitempty"`
+	UserID      int64  `json:"user_id,omitempty"`
+	VCard       string `json:"vcard,omitempty"`
+}
+
+type Location struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}
+
+type SuccessfulPayment struct {
+	Currency                string `json:"currency"`
+	TotalAmount             int    `json:"total_amount"`
+	InvoicePayload          string `json:"invoice_payload"`
+	TelegramPaymentChargeID string `json:"telegram_payment_charge_id"`
+	ProviderPaymentChargeID string `json:"provider_payment_charge_id"`
+}
+
 type CallbackQuery struct {
 	ID           string   `json:"id"`
 	From         User     `json:"from"`
@@ -201,6 +235,8 @@ type CallbackQuery struct {
 type ChatMember struct {
 	Status string `json:"status"`
 	User   User   `json:"user"`
+	// UntilDate is required for kicked members, where 0 means forever.
+	UntilDate *int64 `json:"until_date,omitempty"`
 }
 
 type ChatMemberUpdated struct {
@@ -211,12 +247,61 @@ type ChatMemberUpdated struct {
 	NewChatMember ChatMember `json:"new_chat_member"`
 }
 
+type InlineQuery struct {
+	ID       string `json:"id"`
+	From     User   `json:"from"`
+	Query    string `json:"query"`
+	Offset   string `json:"offset"`
+	ChatType string `json:"chat_type,omitempty"`
+}
+
+type ChosenInlineResult struct {
+	ResultID string `json:"result_id"`
+	From     User   `json:"from"`
+	Query    string `json:"query"`
+}
+
+type PreCheckoutQuery struct {
+	ID             string `json:"id"`
+	From           User   `json:"from"`
+	Currency       string `json:"currency"`
+	TotalAmount    int    `json:"total_amount"`
+	InvoicePayload string `json:"invoice_payload"`
+}
+
+type ReactionType struct {
+	Type  string `json:"type"`
+	Emoji string `json:"emoji"`
+}
+
+type MessageReactionUpdated struct {
+	Chat        Chat           `json:"chat"`
+	MessageID   int            `json:"message_id"`
+	User        *User          `json:"user,omitempty"`
+	Date        int64          `json:"date"`
+	OldReaction []ReactionType `json:"old_reaction"`
+	NewReaction []ReactionType `json:"new_reaction"`
+}
+
+type PollAnswer struct {
+	PollID              string   `json:"poll_id"`
+	User                *User    `json:"user,omitempty"`
+	OptionIDs           []int    `json:"option_ids"`
+	OptionPersistentIDs []string `json:"option_persistent_ids"`
+}
+
 type Update struct {
-	UpdateID      int64              `json:"update_id"`
-	Message       *Message           `json:"message,omitempty"`
-	EditedMessage *Message           `json:"edited_message,omitempty"`
-	CallbackQuery *CallbackQuery     `json:"callback_query,omitempty"`
-	ChatMember    *ChatMemberUpdated `json:"chat_member,omitempty"`
+	UpdateID           int64                   `json:"update_id"`
+	Message            *Message                `json:"message,omitempty"`
+	EditedMessage      *Message                `json:"edited_message,omitempty"`
+	CallbackQuery      *CallbackQuery          `json:"callback_query,omitempty"`
+	ChatMember         *ChatMemberUpdated      `json:"chat_member,omitempty"`
+	MyChatMember       *ChatMemberUpdated      `json:"my_chat_member,omitempty"`
+	InlineQuery        *InlineQuery            `json:"inline_query,omitempty"`
+	ChosenInlineResult *ChosenInlineResult     `json:"chosen_inline_result,omitempty"`
+	PreCheckoutQuery   *PreCheckoutQuery       `json:"pre_checkout_query,omitempty"`
+	MessageReaction    *MessageReactionUpdated `json:"message_reaction,omitempty"`
+	PollAnswer         *PollAnswer             `json:"poll_answer,omitempty"`
 }
 
 // WebhookInfo mirrors the response of getWebhookInfo.

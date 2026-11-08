@@ -68,7 +68,7 @@ func (c *Client) NewUser(chatID int64, vu modules.VU) *User {
 		since:          since,
 		requestsFrom:   since,
 		seenRequestSeq: make(map[string]int64),
-		callbackIDs:    make(map[string]struct{}),
+		queryIDs:       make(map[string]struct{}),
 	}
 }
 

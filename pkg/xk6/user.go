@@ -2,6 +2,7 @@ package telegym
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,7 +34,7 @@ type User struct {
 
 	requestsFrom   int64               // unix seconds floor for journal entries
 	seenRequestSeq map[string]int64    // last matched journal seq per method
-	callbackIDs    map[string]struct{} // callback queries this user injected
+	queryIDs       map[string]struct{} // callback, inline and pre-checkout queries this user injected
 }
 
 // Message is what awaitText / awaitButton return. LatencyMS is set by the
@@ -102,6 +103,99 @@ func (u *User) Click(callbackData string) error {
 	})
 }
 
+// BlockBot injects the my_chat_member update of the user blocking the bot.
+func (u *User) BlockBot() error {
+	_, err := u.injectAs("my_chat_member", map[string]any{"old_status": "member", "new_status": "kicked"})
+	return err
+}
+
+// UnblockBot injects the my_chat_member update of the user unblocking the bot.
+func (u *User) UnblockBot() error {
+	_, err := u.injectAs("my_chat_member", map[string]any{"old_status": "kicked", "new_status": "member"})
+	return err
+}
+
+// InlineQuery injects an inline query and returns its id.
+func (u *User) InlineQuery(query string) (string, error) {
+	return u.injectAs("inline_query", map[string]any{"query": query})
+}
+
+// ChooseInlineResult injects the user picking resultID for query.
+func (u *User) ChooseInlineResult(resultID, query string) error {
+	_, err := u.injectAs("chosen_inline_result", map[string]any{"result_id": resultID, "query": query})
+	return err
+}
+
+// PreCheckout injects a pre-checkout query and returns its id. An empty
+// currency means Telegram Stars.
+func (u *User) PreCheckout(payload string, amount int, currency string) (string, error) {
+	return u.injectAs("pre_checkout_query", paymentFields(payload, amount, currency))
+}
+
+// Pay injects a successful_payment message. An empty currency means Telegram
+// Stars.
+func (u *User) Pay(payload string, amount int, currency string) error {
+	_, err := u.injectAs("successful_payment", paymentFields(payload, amount, currency))
+	return err
+}
+
+// React injects an emoji reaction on the most recently matched bot message.
+func (u *User) React(emoji string) error {
+	_, err := u.injectAs("message_reaction", map[string]any{
+		"message_id":   u.lastSeenMessageID,
+		"new_reaction": []string{emoji},
+	})
+	return err
+}
+
+// AnswerPoll injects the user's vote. No options retracts it.
+func (u *User) AnswerPoll(pollID string, optionIDs []int) error {
+	_, err := u.injectAs("poll_answer", map[string]any{"poll_id": pollID, "option_ids": optionIDs})
+	return err
+}
+
+// SendPhoto injects a photo message referencing fileID.
+func (u *User) SendPhoto(fileID, caption string) error {
+	_, err := u.injectAs("message", map[string]any{
+		"photo":   []map[string]any{{"file_id": fileID}},
+		"caption": caption,
+	})
+	return err
+}
+
+// SendDocument injects a document message referencing fileID.
+func (u *User) SendDocument(fileID, fileName, caption string) error {
+	_, err := u.injectAs("message", map[string]any{
+		"document": map[string]any{"file_id": fileID, "file_name": fileName},
+		"caption":  caption,
+	})
+	return err
+}
+
+// SendContact injects the user sharing their own phone number.
+func (u *User) SendContact(phone string) error {
+	_, err := u.injectAs("message", map[string]any{
+		"contact": map[string]any{"phone_number": phone, "user_id": u.UserID},
+	})
+	return err
+}
+
+// SendLocation injects a location message.
+func (u *User) SendLocation(latitude, longitude float64) error {
+	_, err := u.injectAs("message", map[string]any{
+		"location": map[string]any{"latitude": latitude, "longitude": longitude},
+	})
+	return err
+}
+
+// SendSticker injects a sticker message referencing fileID.
+func (u *User) SendSticker(fileID, emoji string) error {
+	_, err := u.injectAs("message", map[string]any{
+		"sticker": map[string]any{"file_id": fileID, "emoji": emoji},
+	})
+	return err
+}
+
 // AwaitText blocks until a bot message arrives whose text (or caption) matches
 // pattern (Go regexp). Returns error on timeout. timeoutSec is fractional.
 func (u *User) AwaitText(pattern string, timeoutSec float64) (*Message, error) {
@@ -138,8 +232,8 @@ func (u *User) AwaitButton(pattern string, timeoutSec float64) (*Message, error)
 
 // AwaitRequest blocks until the bot calls method with parameters that include
 // params, and returns that call. The journal is shared by all VUs, so calls
-// carrying another user's chat_id or callback_query_id never match. Each call
-// is returned once per user, in order within a method.
+// carrying another user's chat_id or query id never match. Each call is
+// returned once per user, in order within a method.
 func (u *User) AwaitRequest(method string, params map[string]any, timeoutSec float64) (*APIRequest, error) {
 	start := time.Now()
 	deadline := start.Add(time.Duration(timeoutSec * float64(time.Second)))
@@ -207,9 +301,30 @@ func (b *Button) Click(u *User) error {
 // ===================================================================
 
 func (u *User) inject(body map[string]any) error {
+	_, err := u.post(body)
+	return err
+}
+
+// injectAs injects an update of the given type from this user and returns
+// the query id the mock assigned, if any.
+func (u *User) injectAs(updateType string, fields map[string]any) (string, error) {
+	fields["token"] = u.client.token
+	fields["type"] = updateType
+	fields["user_id"] = u.UserID
+	fields["chat_id"] = u.ChatID
+	fields["username"] = u.Username
+	fields["first_name"] = u.FirstName
+	return u.post(fields)
+}
+
+func paymentFields(payload string, amount int, currency string) map[string]any {
+	return map[string]any{"invoice_payload": payload, "total_amount": amount, "currency": currency}
+}
+
+func (u *User) post(body map[string]any) (string, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resp, err := u.client.http.Post(
 		u.client.mockURL+"/debug/inject/update",
@@ -217,21 +332,25 @@ func (u *User) inject(body map[string]any) error {
 		bytes.NewReader(b),
 	)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("inject: %d %s", resp.StatusCode, body)
+		return "", fmt.Errorf("inject: %d %s", resp.StatusCode, body)
 	}
 	var out struct {
-		CallbackQueryID string `json:"callback_query_id"`
+		CallbackQueryID    string `json:"callback_query_id"`
+		InlineQueryID      string `json:"inline_query_id"`
+		PreCheckoutQueryID string `json:"pre_checkout_query_id"`
 	}
-	if json.NewDecoder(resp.Body).Decode(&out) == nil && out.CallbackQueryID != "" {
-		u.callbackIDs[out.CallbackQueryID] = struct{}{}
+	_ = json.NewDecoder(resp.Body).Decode(&out)
+	id := cmp.Or(out.CallbackQueryID, out.InlineQueryID, out.PreCheckoutQueryID)
+	if id != "" {
+		u.queryIDs[id] = struct{}{}
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
-	return nil
+	return id, nil
 }
 
 // awaitRequestWindow is how many of a method's newest journal entries each
@@ -239,15 +358,20 @@ func (u *User) inject(body map[string]any) error {
 // polling stays cheap.
 const awaitRequestWindow = 1000
 
+// queryIDParams are the Bot API parameters that answer a query a user injected.
+var queryIDParams = []string{"callback_query_id", "inline_query_id", "pre_checkout_query_id"}
+
 // ownsRequest reports whether a journal entry can belong to this user. Calls
-// tied to neither a chat nor a click, such as getMe, match every user.
+// tied to neither a chat nor a query, such as getMe, match every user.
 func (u *User) ownsRequest(r *APIRequest) bool {
 	if id, ok := r.Parameters["chat_id"]; ok {
 		return paramText(id) == strconv.FormatInt(u.ChatID, 10)
 	}
-	if id, ok := r.Parameters["callback_query_id"]; ok {
-		_, clicked := u.callbackIDs[paramText(id)]
-		return clicked
+	for _, param := range queryIDParams {
+		if id, ok := r.Parameters[param]; ok {
+			_, injected := u.queryIDs[paramText(id)]
+			return injected
+		}
 	}
 	return true
 }

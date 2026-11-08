@@ -213,3 +213,217 @@ func TestInjectRejectsUnsupportedUpdates(t *testing.T) {
 		})
 	}
 }
+
+const injectUser = `"token":"889:inject","chat_id":42,"user_id":7,"first_name":"Alice"`
+
+func TestInjectMyChatMember(t *testing.T) {
+	tests := []struct {
+		name, old, new string
+		wantUntilOld   bool
+		wantUntilNew   bool
+	}{
+		{"block", "member", "kicked", false, true},
+		{"unblock", "kicked", "member", true, false},
+		{"leave", "member", "left", false, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			update := injectWebhook(t, `{`+injectUser+`,"type":"my_chat_member","old_status":"`+tt.old+`","new_status":"`+tt.new+`"}`, http.StatusOK)
+			member := update.MyChatMember
+			if member == nil || update.ChatMember != nil || update.Message != nil {
+				t.Fatalf("unexpected update: %+v", update)
+			}
+			if member.From.ID != 7 || member.Date == 0 || member.Chat.ID != 42 || member.Chat.FirstName != "Alice" {
+				t.Fatalf("unexpected actor or chat: %+v", member)
+			}
+			if !member.NewChatMember.User.IsBot || !member.OldChatMember.User.IsBot ||
+				member.OldChatMember.Status != tt.old || member.NewChatMember.Status != tt.new {
+				t.Fatalf("the bot should be the member that changed: %+v", member)
+			}
+			if (member.OldChatMember.UntilDate != nil) != tt.wantUntilOld || (member.NewChatMember.UntilDate != nil) != tt.wantUntilNew {
+				t.Fatalf("until_date is required for kicked members only: %+v", member)
+			}
+		})
+	}
+}
+
+func TestInjectInlineUpdates(t *testing.T) {
+	update := injectWebhook(t, `{`+injectUser+`,"type":"inline_query","query":"cats","offset":"20"}`, http.StatusOK)
+	query := update.InlineQuery
+	if query == nil || query.ID == "" || query.From.ID != 7 || query.Query != "cats" || query.Offset != "20" || query.ChatType != "private" {
+		t.Fatalf("unexpected inline query: %+v", update)
+	}
+
+	update = injectWebhook(t, `{`+injectUser+`,"type":"chosen_inline_result","result_id":"r1","query":"cats"}`, http.StatusOK)
+	chosen := update.ChosenInlineResult
+	if chosen == nil || chosen.ResultID != "r1" || chosen.From.ID != 7 || chosen.Query != "cats" {
+		t.Fatalf("unexpected chosen result: %+v", update)
+	}
+}
+
+func TestInjectPayments(t *testing.T) {
+	tests := []struct {
+		name, currency, want string
+	}{
+		{"stars by default", "", "XTR"},
+		{"explicit currency", "USD", "USD"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fields := `{` + injectUser + `,"total_amount":150,"invoice_payload":"order-1","currency":"` + tt.currency + `",`
+
+			update := injectWebhook(t, fields+`"type":"pre_checkout_query"}`, http.StatusOK)
+			query := update.PreCheckoutQuery
+			if query == nil || query.ID == "" || query.From.ID != 7 || query.Currency != tt.want ||
+				query.TotalAmount != 150 || query.InvoicePayload != "order-1" {
+				t.Fatalf("unexpected pre-checkout query: %+v", update)
+			}
+
+			update = injectWebhook(t, fields+`"type":"successful_payment"}`, http.StatusOK)
+			if update.Message == nil || update.Message.MessageID == 0 || update.Message.From == nil || update.Message.Chat.ID != 42 {
+				t.Fatalf("unexpected payment message: %+v", update)
+			}
+			payment := update.Message.SuccessfulPayment
+			if payment == nil || payment.Currency != tt.want || payment.TotalAmount != 150 || payment.InvoicePayload != "order-1" ||
+				payment.TelegramPaymentChargeID == "" || payment.ProviderPaymentChargeID == "" {
+				t.Fatalf("unexpected payment: %+v", payment)
+			}
+		})
+	}
+}
+
+func TestInjectMessageReaction(t *testing.T) {
+	update := injectWebhook(t, `{`+injectUser+`,"type":"message_reaction","message_id":123,"new_reaction":["👍"]}`, http.StatusOK)
+	reaction := update.MessageReaction
+	if reaction == nil || reaction.MessageID != 123 || reaction.Date == 0 || reaction.Chat.ID != 42 || reaction.User == nil || reaction.User.ID != 7 {
+		t.Fatalf("unexpected reaction: %+v", update)
+	}
+	if reaction.OldReaction == nil || len(reaction.OldReaction) != 0 {
+		t.Fatalf("old_reaction must be an empty array: %+v", reaction.OldReaction)
+	}
+	if len(reaction.NewReaction) != 1 || reaction.NewReaction[0] != (ReactionType{Type: "emoji", Emoji: "👍"}) {
+		t.Fatalf("unexpected new_reaction: %+v", reaction.NewReaction)
+	}
+}
+
+func TestInjectPollAnswer(t *testing.T) {
+	update := injectWebhook(t, `{`+injectUser+`,"type":"poll_answer","poll_id":"p1","option_ids":[0,2]}`, http.StatusOK)
+	answer := update.PollAnswer
+	if answer == nil || answer.PollID != "p1" || answer.User == nil || answer.User.ID != 7 {
+		t.Fatalf("unexpected poll answer: %+v", update)
+	}
+	if len(answer.OptionIDs) != 2 || answer.OptionIDs[1] != 2 || len(answer.OptionPersistentIDs) != 2 {
+		t.Fatalf("unexpected options: %+v", answer)
+	}
+
+	update = injectWebhook(t, `{`+injectUser+`,"type":"poll_answer","poll_id":"p1"}`, http.StatusOK)
+	if update.PollAnswer.OptionIDs == nil || update.PollAnswer.OptionPersistentIDs == nil {
+		t.Fatalf("a retracted vote must carry empty arrays: %+v", update.PollAnswer)
+	}
+}
+
+func TestInjectMedia(t *testing.T) {
+	t.Run("photo", func(t *testing.T) {
+		message := injectWebhook(t, `{`+injectUser+`,"photo":[{"file_id":"ph1"}],"caption":"look"}`, http.StatusOK).Message
+		if message == nil || len(message.Photo) != 1 || message.Caption != "look" || message.Text != "" {
+			t.Fatalf("unexpected photo message: %+v", message)
+		}
+		if size := message.Photo[0]; size.FileID != "ph1" || size.FileUniqueID == "" || size.Width == 0 || size.Height == 0 {
+			t.Fatalf("required photo fields not filled: %+v", size)
+		}
+	})
+	t.Run("document", func(t *testing.T) {
+		message := injectWebhook(t, `{`+injectUser+`,"document":{"file_id":"d1","file_name":"a.pdf"},"caption":"cv"}`, http.StatusOK).Message
+		if message == nil || message.Document == nil || message.Document.FileUniqueID == "" || message.Document.FileName != "a.pdf" || message.Caption != "cv" {
+			t.Fatalf("unexpected document message: %+v", message)
+		}
+	})
+	t.Run("contact", func(t *testing.T) {
+		message := injectWebhook(t, `{`+injectUser+`,"contact":{"phone_number":"+380501234567","user_id":7}}`, http.StatusOK).Message
+		if message == nil || message.Contact == nil || message.Contact.PhoneNumber != "+380501234567" ||
+			message.Contact.FirstName != "Alice" || message.Contact.UserID != 7 {
+			t.Fatalf("unexpected contact message: %+v", message)
+		}
+	})
+	t.Run("location", func(t *testing.T) {
+		message := injectWebhook(t, `{`+injectUser+`,"location":{"latitude":50.45,"longitude":30.52}}`, http.StatusOK).Message
+		if message == nil || message.Location == nil || message.Location.Latitude != 50.45 || message.Location.Longitude != 30.52 {
+			t.Fatalf("unexpected location message: %+v", message)
+		}
+	})
+	t.Run("sticker", func(t *testing.T) {
+		message := injectWebhook(t, `{`+injectUser+`,"sticker":{"file_id":"st1","emoji":"🔥"}}`, http.StatusOK).Message
+		if message == nil || message.Sticker == nil || message.Text != "" {
+			t.Fatalf("unexpected sticker message: %+v", message)
+		}
+		if s := message.Sticker; s.FileID != "st1" || s.Emoji != "🔥" || s.FileUniqueID == "" || s.Type != "regular" || s.Width == 0 || s.Height == 0 {
+			t.Fatalf("required sticker fields not filled: %+v", s)
+		}
+	})
+	t.Run("edited", func(t *testing.T) {
+		update := injectWebhook(t, `{`+injectUser+`,"type":"edited_message","message_id":5,"location":{"latitude":1,"longitude":2}}`, http.StatusOK)
+		if update.EditedMessage == nil || update.EditedMessage.MessageID != 5 || update.EditedMessage.Location == nil {
+			t.Fatalf("unexpected edited location: %+v", update)
+		}
+	})
+}
+
+// TestInjectQueryIDsReachPollingBots checks the ids a scenario needs to match
+// the bot's answer, and that the new types are delivered by long polling too.
+func TestInjectQueryIDsReachPollingBots(t *testing.T) {
+	tests := []struct {
+		name, fields, idKey string
+		id                  func(Update) string
+	}{
+		{"inline query", `"type":"inline_query","query":"cats"`, "inline_query_id", func(u Update) string { return u.InlineQuery.ID }},
+		{"pre-checkout", `"type":"pre_checkout_query","total_amount":5,"invoice_payload":"p"`, "pre_checkout_query_id", func(u Update) string { return u.PreCheckoutQuery.ID }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := New(Config{Quiet: true})
+			startPolling(t, srv, "889:inject")
+			rec := pollingRequest(srv, http.MethodPost, "/debug/inject/update", `{`+injectUser+`,`+tt.fields+`}`)
+			var response map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || rec.Code != http.StatusOK {
+				t.Fatalf("inject status=%d body=%s err=%v", rec.Code, rec.Body.String(), err)
+			}
+
+			updates := decodeUpdates(t, pollingRequest(srv, http.MethodGet, "/bot889:inject/getUpdates", ""))
+			if len(updates) != 1 || tt.id(updates[0]) == "" || response[tt.idKey] != tt.id(updates[0]) {
+				t.Fatalf("response %v does not name the delivered query: %+v", response, updates)
+			}
+		})
+	}
+}
+
+func TestInjectRejectsInvalidUpdates(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields string
+	}{
+		{"my_chat_member without status", `"type":"my_chat_member","new_status":"kicked"`},
+		{"my_chat_member administrator", `"type":"my_chat_member","old_status":"member","new_status":"administrator"`},
+		{"chosen result without id", `"type":"chosen_inline_result","query":"cats"`},
+		{"pre-checkout without amount", `"type":"pre_checkout_query","invoice_payload":"p"`},
+		{"pre-checkout without payload", `"type":"pre_checkout_query","total_amount":5`},
+		{"payment without amount", `"type":"successful_payment","invoice_payload":"p"`},
+		{"reaction without message", `"type":"message_reaction","new_reaction":["👍"]`},
+		{"reaction without emoji", `"type":"message_reaction","message_id":1`},
+		{"poll answer without poll", `"type":"poll_answer","option_ids":[0]`},
+		{"photo without file id", `"photo":[{"width":1}]`},
+		{"document without file id", `"document":{"file_name":"a.pdf"}`},
+		{"contact without phone", `"contact":{"first_name":"A"}`},
+		{"sticker without file id", `"sticker":{"emoji":"🔥"}`},
+		{"caption on a sticker", `"caption":"hi","sticker":{"file_id":"s"}`},
+		{"text with a sticker", `"text":"hi","sticker":{"file_id":"s"}`},
+		{"text with media", `"text":"hi","location":{"latitude":1,"longitude":2}`},
+		{"two kinds of media", `"photo":[{"file_id":"p"}],"location":{"latitude":1,"longitude":2}`},
+		{"caption without media", `"caption":"hi"`},
+		{"caption on a contact", `"caption":"hi","contact":{"phone_number":"1"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			injectWebhook(t, `{`+injectUser+`,`+tt.fields+`}`, http.StatusBadRequest)
+		})
+	}
+}
