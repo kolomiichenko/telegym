@@ -48,5 +48,11 @@ export default function () {
     'click ack under 500ms': (m) => m.latencyMs < 500,
   });
 
+  // 3. The bot must also have answered the callback query itself.
+  const answer = u.awaitRequest('answerCallbackQuery', {}, 5);
+  check(answer, {
+    'callback answered':     (r) => r.status === 200,
+  });
+
   sleep(0.5);
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"time"
 
 	"go.k6.io/k6/v2/js/modules"
@@ -29,6 +30,10 @@ type User struct {
 	// share MessageID but differ in EventSeq)
 	lastSeenMessageID int // last MATCHED telegram message_id - used as
 	// the target message for Click() callbacks
+
+	requestsFrom   int64               // unix seconds floor for journal entries
+	seenRequestSeq map[string]int64    // last matched journal seq per method
+	callbackIDs    map[string]struct{} // callback queries this user injected
 }
 
 // Message is what awaitText / awaitButton return. LatencyMS is set by the
@@ -57,6 +62,18 @@ type Button struct {
 	Text         string `json:"text"`
 	CallbackData string `json:"callback_data" js:"callbackData"`
 	URL          string `json:"url,omitempty"`
+}
+
+// APIRequest is one Bot API call from the mock's request journal. LatencyMS
+// is set by awaitRequest.
+type APIRequest struct {
+	Seq        int64          `json:"seq"`
+	Method     string         `json:"method"`
+	Parameters map[string]any `json:"parameters"`
+	Status     int            `json:"status"`
+	At         int64          `json:"at"`
+
+	LatencyMS float64 `json:"-" js:"latencyMs"`
 }
 
 // Send injects a plain text message from the user.
@@ -119,6 +136,42 @@ func (u *User) AwaitButton(pattern string, timeoutSec float64) (*Message, error)
 	})
 }
 
+// AwaitRequest blocks until the bot calls method with parameters that include
+// params, and returns that call. The journal is shared by all VUs, so calls
+// carrying another user's chat_id or callback_query_id never match. Each call
+// is returned once per user, in order within a method.
+func (u *User) AwaitRequest(method string, params map[string]any, timeoutSec float64) (*APIRequest, error) {
+	start := time.Now()
+	deadline := start.Add(time.Duration(timeoutSec * float64(time.Second)))
+	poll := 25 * time.Millisecond
+	const maxPoll = 250 * time.Millisecond
+
+	for {
+		requests, err := u.client.requests(method, awaitRequestWindow)
+		if err != nil {
+			return nil, err
+		}
+		for i := range requests {
+			r := &requests[i]
+			if r.Seq <= u.seenRequestSeq[method] || r.At < u.requestsFrom ||
+				!u.ownsRequest(r) || !includesParams(r.Parameters, params) {
+				continue
+			}
+			u.seenRequestSeq[method] = r.Seq
+			r.LatencyMS = float64(time.Since(start).Microseconds()) / 1000.0
+			return r, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("await request timeout after %.1fs (chat=%d, method=%s, seen_seq=%d)",
+				timeoutSec, u.ChatID, method, u.seenRequestSeq[method])
+		}
+		time.Sleep(poll)
+		if poll < maxPoll {
+			poll *= 2
+		}
+	}
+}
+
 // FindButton scans a Message's inline keyboard for a callback_data matching
 // pattern. Returns nil if not found. Useful when the scenario needs to extract
 // a specific button (e.g. "country:UA" from a list of countries).
@@ -171,8 +224,52 @@ func (u *User) inject(body map[string]any) error {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("inject: %d %s", resp.StatusCode, body)
 	}
+	var out struct {
+		CallbackQueryID string `json:"callback_query_id"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&out) == nil && out.CallbackQueryID != "" {
+		u.callbackIDs[out.CallbackQueryID] = struct{}{}
+	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+// awaitRequestWindow is how many of a method's newest journal entries each
+// awaitRequest poll reads: enough to survive busy runs, small enough that
+// polling stays cheap.
+const awaitRequestWindow = 1000
+
+// ownsRequest reports whether a journal entry can belong to this user. Calls
+// tied to neither a chat nor a click, such as getMe, match every user.
+func (u *User) ownsRequest(r *APIRequest) bool {
+	if id, ok := r.Parameters["chat_id"]; ok {
+		return paramText(id) == strconv.FormatInt(u.ChatID, 10)
+	}
+	if id, ok := r.Parameters["callback_query_id"]; ok {
+		_, clicked := u.callbackIDs[paramText(id)]
+		return clicked
+	}
+	return true
+}
+
+func includesParams(got, want map[string]any) bool {
+	for key, value := range want {
+		actual, ok := got[key]
+		if !ok || paramText(actual) != paramText(value) {
+			return false
+		}
+	}
+	return true
+}
+
+// paramText normalizes a parameter for comparison: bots may send the same
+// value as a JSON number or as a form-encoded string.
+func paramText(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 type messagesResp struct {

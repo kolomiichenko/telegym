@@ -61,3 +61,15 @@ type API struct {
 func (a *API) NewUser(chatID int64) *User {
 	return a.client.NewUser(chatID, a.vu)
 }
+
+// Requests returns the newest Bot API calls the bot made, oldest first. An
+// empty method returns all of them; limit 0 uses the mock's default of 100.
+func (a *API) Requests(method string, limit int) ([]APIRequest, error) {
+	return a.client.requests(method, limit)
+}
+
+// ClearRequests empties the bot's request journal, for every VU, and returns
+// how many calls it held.
+func (a *API) ClearRequests() (int, error) {
+	return a.client.clearRequests()
+}
