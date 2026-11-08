@@ -46,6 +46,7 @@ type Server struct {
 	handlers *Handlers
 	chat     *chatHandlers
 	metrics  *Metrics
+	limiter  *rateLimiter
 	router   *gin.Engine
 }
 
@@ -85,15 +86,15 @@ func New(cfg Config) *Server {
 		handlers: h,
 		chat:     newChatHandlers(store, disp),
 		metrics:  metrics,
+		limiter:  newRateLimiter(cfg.FloodLimits),
 		router:   router,
 	}
+	s.limiter.enabled.Store(cfg.RateLimits)
 	router.Use(metrics.ginMiddleware())
 	if !cfg.DisableRequestJournal {
 		router.Use(s.requestJournalMiddleware())
 	}
-	if cfg.RateLimits || cfg.LatencyMax > 0 || cfg.LatencyMin > 0 || cfg.FaultRate > 0 {
-		router.Use(s.faultsMiddleware())
-	}
+	router.Use(s.faultsMiddleware())
 	s.registerRoutes()
 	return s
 }
@@ -182,6 +183,8 @@ func (s *Server) registerRoutes() {
 	s.router.POST("/debug/messages/:token/clear", s.handlers.DebugClearMessages)
 	s.router.GET("/debug/requests/:token", s.handlers.DebugListRequests)
 	s.router.POST("/debug/requests/:token/clear", s.handlers.DebugClearRequests)
+	s.router.GET("/debug/ratelimits", s.debugGetRateLimits)
+	s.router.PUT("/debug/ratelimits", s.debugPutRateLimits)
 
 	// File storage (multipart uploads from bot, fetched by telegym-proxy)
 	s.router.GET("/debug/files", s.handlers.DebugListFiles)
