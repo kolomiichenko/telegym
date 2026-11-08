@@ -420,11 +420,20 @@ func (h *Handlers) sendMedia(c *gin.Context, bot *botEntry, kind string) {
 
 	switch kind {
 	case "photo":
-		m.Photo = []PhotoSize{{FileID: fileID, FileUniqueID: uniqueID, Width: 1, Height: 1}}
+		m.Photo = []PhotoSize{{
+			FileID: fileID, FileUniqueID: uniqueID, Width: 1, Height: 1,
+			FileSize: int(file.Size),
+		}}
 	case "video":
-		m.Video = &Video{FileID: fileID, FileUniqueID: uniqueID, Width: 1, Height: 1, Duration: 1}
+		m.Video = &Video{
+			FileID: fileID, FileUniqueID: uniqueID, Width: 1, Height: 1, Duration: 1,
+			FileSize: file.Size,
+		}
 	case "animation":
-		m.Animation = &Animation{FileID: fileID, FileUniqueID: uniqueID, Width: 1, Height: 1, Duration: 1}
+		m.Animation = &Animation{
+			FileID: fileID, FileUniqueID: uniqueID, Width: 1, Height: 1, Duration: 1,
+			FileSize: file.Size,
+		}
 	case "sticker":
 		// Real Telegram stores an emoji per sticker in its sticker-set DB
 		// and returns it on every send. The mock has no such DB, so we
@@ -435,7 +444,7 @@ func (h *Handlers) sendMedia(c *gin.Context, bot *botEntry, kind string) {
 		m.Sticker = &Sticker{
 			FileID: fileID, FileUniqueID: uniqueID,
 			Type: "regular", Width: 1, Height: 1,
-			Emoji: toString(body["emoji"]),
+			Emoji: toString(body["emoji"]), FileSize: file.Size,
 		}
 	}
 	bot.AppendMessage(m)
