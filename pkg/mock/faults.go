@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -75,7 +76,7 @@ func ParseRateLimit(s string) (RateLimit, error) {
 	if !ok {
 		return RateLimit{}, fmt.Errorf("want unit s, min or h, got %q", unit)
 	}
-	limit := RateLimit{Rate: count / period, Burst: count}
+	limit := RateLimit{Rate: count / period, Burst: max(count, 1)}
 	if hasBurst {
 		if limit.Burst, err = strconv.ParseFloat(strings.TrimSpace(burstText), 64); err != nil || limit.Burst < 1 {
 			return RateLimit{}, fmt.Errorf("want burst >= 1, got %q", burstText)
@@ -111,8 +112,10 @@ func (b *bucket) wait(rate float64) time.Duration {
 	return time.Duration((1 - b.tokens) / rate * float64(time.Second))
 }
 
-// rateLimiter emulates Telegram's per-bot and per-chat flood limits.
+// rateLimiter emulates Telegram's per-bot and per-chat flood limits. It
+// exists even while disabled, so /debug/ratelimits can turn it on mid-run.
 type rateLimiter struct {
+	enabled   atomic.Bool
 	mu        sync.Mutex
 	now       func() time.Time
 	limits    FloodLimits
@@ -189,6 +192,106 @@ func (l *rateLimiter) sweep(now time.Time) {
 	}
 }
 
+// rateLimitSettings is the /debug/ratelimits body, limits in the same
+// rate[,burst] format as the env vars. Omitted fields are left unchanged.
+type rateLimitSettings struct {
+	Enabled *bool   `json:"enabled,omitempty"`
+	Bot     *string `json:"bot,omitempty"`
+	Paid    *string `json:"paid,omitempty"`
+	Private *string `json:"private,omitempty"`
+	Group   *string `json:"group,omitempty"`
+}
+
+func (l *rateLimiter) settings() rateLimitSettings {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	text := func(limit RateLimit) *string {
+		s := formatRateLimit(limit)
+		return &s
+	}
+	enabled := l.enabled.Load()
+	return rateLimitSettings{
+		Enabled: &enabled,
+		Bot:     text(l.limits.Bot),
+		Paid:    text(l.limits.Paid),
+		Private: text(l.limits.Private),
+		Group:   text(l.limits.Group),
+	}
+}
+
+// apply changes the given settings, or none of them if any is invalid. New
+// limits take effect on the next call. Buckets are kept: refill caps them at
+// the new burst, so a tightened limit bites at once.
+func (l *rateLimiter) apply(in rateLimitSettings) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	limits := l.limits
+	for _, field := range []struct {
+		name  string
+		value *string
+		dst   *RateLimit
+	}{
+		{"bot", in.Bot, &limits.Bot},
+		{"paid", in.Paid, &limits.Paid},
+		{"private", in.Private, &limits.Private},
+		{"group", in.Group, &limits.Group},
+	} {
+		if field.value == nil {
+			continue
+		}
+		parsed, err := ParseRateLimit(*field.value)
+		if err != nil {
+			return fmt.Errorf("%s: %w", field.name, err)
+		}
+		*field.dst = parsed
+	}
+	l.limits = limits
+	if in.Enabled != nil {
+		l.enabled.Store(*in.Enabled)
+	}
+	return nil
+}
+
+// formatRateLimit is the inverse of ParseRateLimit, picking the shortest
+// unit that gives a whole count: 20/min rather than 0.333/s.
+func formatRateLimit(limit RateLimit) string {
+	count, unit := limit.Rate, "s"
+	for _, u := range []struct {
+		name    string
+		seconds float64
+	}{{"s", 1}, {"min", 60}, {"h", 3600}} {
+		if c := limit.Rate * u.seconds; math.Abs(c-math.Round(c)) < 1e-9 {
+			count, unit = math.Round(c), u.name
+			break
+		}
+	}
+	return strconv.FormatFloat(count, 'f', -1, 64) + "/" + unit + "," + strconv.FormatFloat(limit.Burst, 'f', -1, 64)
+}
+
+// debugGetRateLimits serves GET /debug/ratelimits.
+func (s *Server) debugGetRateLimits(c *gin.Context) {
+	c.JSON(http.StatusOK, s.limiter.settings())
+}
+
+// debugPutRateLimits serves PUT /debug/ratelimits. Unknown fields are refused
+// so a misspelled limit cannot silently leave the old one in force.
+func (s *Server) debugPutRateLimits(c *gin.Context) {
+	var in rateLimitSettings
+	decoder := json.NewDecoder(c.Request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.limiter.apply(in); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, s.limiter.settings())
+}
+
 // isFloodLimited reports whether a Bot API method sends a message and so
 // counts against Telegram's flood limits.
 func isFloodLimited(method string) bool {
@@ -204,10 +307,7 @@ func isFloodLimited(method string) bool {
 // faultsMiddleware adds configured latency, random 500s and Telegram flood
 // limits to Bot API calls. Debug and chat UI routes are left untouched.
 func (s *Server) faultsMiddleware() gin.HandlerFunc {
-	var limiter *rateLimiter
-	if s.cfg.RateLimits {
-		limiter = newRateLimiter(s.cfg.FloodLimits)
-	}
+	limiter := s.limiter
 	return func(c *gin.Context) {
 		token, method, ok := parseBotPath(c.Request.URL.Path)
 		if !ok {
@@ -231,7 +331,7 @@ func (s *Server) faultsMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if limiter == nil || !isFloodLimited(method) {
+		if !limiter.enabled.Load() || !isFloodLimited(method) {
 			c.Next()
 			return
 		}

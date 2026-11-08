@@ -188,6 +188,14 @@ Off by default; turn them on to see how the bot copes with real Telegram:
   `TELEGYM_MOCK_RATE_LIMIT_BOT=30/s,60`, `..._PAID`, `..._PRIVATE=1/s,3`,
   `..._GROUP=20/min`. Telegram publishes rates but not burst sizes, so the
   defaults are estimates.
+- Change them mid-run, without a restart, to test recovery: tighten the limits
+  so the bot hits a wave of `429`s, restore them, and check that it honours
+  `retry_after` and catches up. `GET /debug/ratelimits` returns the current
+  settings; `PUT /debug/ratelimits` changes any of them and returns the result,
+  or refuses the whole request if one value is invalid:
+  `{"enabled": true, "bot": "5/s,5", "paid": "...", "private": "...", "group": "..."}`.
+  New limits apply to the next call. Existing buckets are kept, capped at the
+  new burst. Scenarios can call `tg.setRateLimits({...})`.
 - `TELEGYM_MOCK_LATENCY=20ms-150ms` delays each Bot API call by a random
   duration in that range (`50ms` for a fixed delay).
 - `TELEGYM_MOCK_FAULT_RATE=0.01` fails 1% of Bot API calls with a 500.

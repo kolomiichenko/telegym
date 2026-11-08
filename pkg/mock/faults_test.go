@@ -3,6 +3,7 @@ package mock
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -176,6 +177,7 @@ func TestParseRateLimit(t *testing.T) {
 		{"1/s,3", RateLimit{Rate: 1, Burst: 3}, true},
 		{"20/min", RateLimit{Rate: 20.0 / 60, Burst: 20}, true},
 		{" 3600 / h , 10 ", RateLimit{Rate: 1, Burst: 10}, true},
+		{"0.5/s", RateLimit{Rate: 0.5, Burst: 1}, true},
 		{"30", RateLimit{}, false},
 		{"0/s", RateLimit{}, false},
 		{"5/day", RateLimit{}, false},
@@ -186,6 +188,130 @@ func TestParseRateLimit(t *testing.T) {
 		if (err == nil) != tt.ok || got != tt.want {
 			t.Errorf("ParseRateLimit(%q) = %+v, %v; want %+v, ok=%v", tt.in, got, err, tt.want, tt.ok)
 		}
+	}
+}
+
+func TestFormatRateLimitRoundTrips(t *testing.T) {
+	for want, limit := range map[string]RateLimit{
+		"30/s,30":     {Rate: 30, Burst: 30},
+		"1/s,3":       {Rate: 1, Burst: 3},
+		"20/min,20":   {Rate: 20.0 / 60, Burst: 20},
+		"90/min,5":    {Rate: 1.5, Burst: 5},
+		"1/h,1":       {Rate: 1.0 / 3600, Burst: 1},
+		"0.0001/s,1":  {Rate: 0.0001, Burst: 1},
+		"1000/s,1000": {Rate: 1000, Burst: 1000},
+	} {
+		got := formatRateLimit(limit)
+		if got != want {
+			t.Errorf("formatRateLimit(%+v) = %q, want %q", limit, got, want)
+		}
+		parsed, err := ParseRateLimit(got)
+		if err != nil {
+			t.Errorf("ParseRateLimit(%q): %v", got, err)
+		}
+		if math.Abs(parsed.Rate-limit.Rate) > 1e-9 || parsed.Burst != limit.Burst {
+			t.Errorf("round trip of %q = %+v, want %+v", got, parsed, limit)
+		}
+	}
+}
+
+func rateLimitsRequest(t *testing.T, srv *Server, method, body string) (int, rateLimitSettings) {
+	t.Helper()
+	req := httptest.NewRequest(method, "/debug/ratelimits", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	var settings rateLimitSettings
+	if rec.Code == http.StatusOK {
+		if err := json.Unmarshal(rec.Body.Bytes(), &settings); err != nil {
+			t.Fatalf("decode %q: %v", rec.Body.String(), err)
+		}
+	}
+	return rec.Code, settings
+}
+
+// TestDebugRateLimitsEnableAtRuntime covers a mock started without rate
+// limits: the limiter must still be wired in for PUT to have any effect.
+func TestDebugRateLimitsEnableAtRuntime(t *testing.T) {
+	srv := New(Config{Quiet: true})
+
+	code, got := rateLimitsRequest(t, srv, http.MethodGet, "")
+	if code != http.StatusOK || *got.Enabled || *got.Bot != "30/s,30" || *got.Paid != "1000/s,1000" ||
+		*got.Private != "1/s,3" || *got.Group != "20/min,20" {
+		t.Fatalf("GET: status %d, settings %+v", code, got)
+	}
+	for i := range 5 {
+		if code, _ := callBot(t, srv, "sendMessage", sendTo("42")); code != http.StatusOK {
+			t.Fatalf("disabled, call %d: status %d, want 200", i, code)
+		}
+	}
+
+	code, got = rateLimitsRequest(t, srv, http.MethodPut, `{"enabled":true,"private":"1/min,2"}`)
+	if code != http.StatusOK || !*got.Enabled || *got.Private != "1/min,2" || *got.Bot != "30/s,30" {
+		t.Fatalf("PUT: status %d, settings %+v", code, got)
+	}
+	for i := range 2 {
+		if code, _ := callBot(t, srv, "sendMessage", sendTo("43")); code != http.StatusOK {
+			t.Fatalf("enabled, call %d: status %d, want 200", i, code)
+		}
+	}
+	if code, _ := callBot(t, srv, "sendMessage", sendTo("43")); code != http.StatusTooManyRequests {
+		t.Fatalf("over the new limit: status %d, want 429", code)
+	}
+
+	if code, got = rateLimitsRequest(t, srv, http.MethodPut, `{"enabled":false}`); code != http.StatusOK || *got.Private != "1/min,2" {
+		t.Fatalf("disable: status %d, settings %+v", code, got)
+	}
+	if code, _ := callBot(t, srv, "sendMessage", sendTo("43")); code != http.StatusOK {
+		t.Fatalf("after disabling: status %d, want 200", code)
+	}
+}
+
+func TestDebugRateLimitsRejectsBadInput(t *testing.T) {
+	srv := New(Config{Quiet: true})
+	for name, body := range map[string]string{
+		"malformed JSON":             `{`,
+		"unknown field":              `{"privat":"1/s"}`,
+		"bad limit":                  `{"bot":"nope"}`,
+		"one bad limit among valid":  `{"bot":"5/s","group":"5/day"}`,
+		"bad limit with enable flag": `{"enabled":true,"paid":"0/s"}`,
+	} {
+		if code, _ := rateLimitsRequest(t, srv, http.MethodPut, body); code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400", name, code)
+		}
+	}
+	if _, got := rateLimitsRequest(t, srv, http.MethodGet, ""); *got.Enabled || *got.Bot != "30/s,30" {
+		t.Errorf("a refused PUT changed the settings: %+v", got)
+	}
+}
+
+// TestRateLimiterApplyKeepsBuckets pins the documented behavior: a change
+// does not reset buckets, and a lower burst caps what they had saved up.
+func TestRateLimiterApplyKeepsBuckets(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newRateLimiter(FloodLimits{Bot: RateLimit{Rate: 1000, Burst: 1000}, Private: RateLimit{Rate: 1, Burst: 5}})
+	l.now = func() time.Time { return now }
+	limit := func(s string) *string { return &s }
+
+	for i := range 5 {
+		if wait := l.allow("t", "42", false); wait != 0 {
+			t.Fatalf("call %d: wait %v, want 0", i, wait)
+		}
+	}
+	if err := l.apply(rateLimitSettings{Private: limit("1/s,2")}); err != nil {
+		t.Fatal(err)
+	}
+	if l.allow("t", "42", false) == 0 {
+		t.Fatal("the change reset an empty bucket")
+	}
+
+	now = now.Add(time.Minute - time.Second)
+	for i := range 2 {
+		if wait := l.allow("t", "42", false); wait != 0 {
+			t.Fatalf("after refill, call %d: wait %v, want 0", i, wait)
+		}
+	}
+	if l.allow("t", "42", false) == 0 {
+		t.Fatal("bucket exceeded the new burst")
 	}
 }
 
