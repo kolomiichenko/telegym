@@ -401,11 +401,24 @@ func (h *Handlers) sendMedia(c *gin.Context, bot *botEntry, kind string) {
 	// If this was a multipart upload, capture the actual bytes into the
 	// FileStore so telegym-proxy can later forward the real file to Telegram.
 	// For file_id-only requests (cached), we keep the existing fake ID.
-	file, err := h.captureUploadedFile(c, kind, kind)
+	partName, attached := strings.CutPrefix(toString(body[kind]), "attach://")
+	if !attached {
+		partName = kind
+	} else if partName == "" {
+		errResp(c, http.StatusBadRequest, "Bad Request: empty attach reference")
+		return
+	}
+
+	file, err := h.captureUploadedFile(c, kind, partName)
 	if err != nil {
 		respondUploadError(c, err)
 		return
 	}
+	if attached && file.ID == "" {
+		errResp(c, http.StatusBadRequest, fmt.Sprintf("Bad Request: multipart attachment %q not found", partName))
+		return
+	}
+
 	fileID := file.ID
 	if fileID == "" {
 		// Fall back to whatever was passed in the body as file reference,
