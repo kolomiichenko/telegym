@@ -66,6 +66,8 @@ func (h *chatHandlers) register(r *gin.RouterGroup, defaultToken string) {
 	r.GET("/:token/:chat_id/messages", h.messages)
 	r.POST("/:token/:chat_id/send", h.send)
 	r.POST("/:token/:chat_id/click", h.click)
+	r.GET("/:token/:chat_id/widget/:message_id", h.widgetPage)
+	r.POST("/:token/:chat_id/widget/:message_id/query", h.widgetQuery)
 }
 
 type homeVM struct {
@@ -184,6 +186,7 @@ type msgVM struct {
 	TopicCreated  string // non-empty for a forum_topic_created service row
 	TopicHref     string // chat page filtered to the created topic
 	PhotoURL      string // /debug/files/<id> when the photo's bytes were uploaded to the mock
+	Widget        *widgetVM
 }
 
 type btnVM struct {
@@ -543,6 +546,9 @@ func mergeChatLog(botMsgs []Message, userInputs []UserInput, token string, chatI
 			MessageID: m.MessageID,
 			Stamp:     time.Unix(m.Date, 0).Format("15:04:05"),
 			MediaTag:  mediaTag(m),
+		}
+		if m.Widget != nil {
+			v.Widget = newWidgetVM(m.Widget, token, chatID, m.MessageID, name)
 		}
 		if m.ForumTopicCreated != nil {
 			v.Text = ""

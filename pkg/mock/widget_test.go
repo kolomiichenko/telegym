@@ -360,7 +360,7 @@ func TestAnswerWidgetQuery(t *testing.T) {
 	expired := inject()
 	bot := srv.Store().Bot(widgetBot)
 	bot.widgets.mu.Lock()
-	bot.widgets.queries[expired] = time.Now().Add(-widgetQueryTTL - time.Second)
+	bot.widgets.queries[expired].issued = time.Now().Add(-widgetQueryTTL - time.Second)
 	bot.widgets.mu.Unlock()
 	rec := answer(expired, "late")
 	wantStatus(t, rec, http.StatusBadRequest)
@@ -379,5 +379,97 @@ func TestDebugChatRendersWidget(t *testing.T) {
 	}
 	if mediaTag(m) != "widget" {
 		t.Fatalf("media tag %q", mediaTag(m))
+	}
+}
+
+func TestDebugChatWidgetPage(t *testing.T) {
+	srv := New(Config{Quiet: true})
+	m := sendTestWidget(t, srv, `,"allow_queries":true,"chat_data":"</script><b>"`)
+	page := fmt.Sprintf("/debug/chat/%s/42/widget/%d?name=ann", widgetBot, m.MessageID)
+
+	rec := pollingRequest(srv, http.MethodGet, page, "")
+	wantStatus(t, rec, http.StatusOK)
+	csp := rec.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "default-src 'none'") || !strings.HasPrefix(csp, "sandbox allow-scripts;") {
+		t.Fatalf("widget page is not sandboxed: %q", csp)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"window.TelegramWidget", `"canQuery":true`, `"chatData":"`, `"first_name":"ann"`, "<b>hi</b>"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("widget page lacks %q", want)
+		}
+	}
+	// chat_data must not close the runtime's script element.
+	if strings.Contains(body, `"chatData":"</script>`) {
+		t.Fatal("chat_data is not escaped in the runtime init")
+	}
+	if strings.Contains(body, "/*INIT*/") {
+		t.Fatal("runtime init placeholder not replaced")
+	}
+	wantStatus(t, pollingRequest(srv, http.MethodGet, fmt.Sprintf("/debug/chat/%s/42/widget/1", widgetBot), ""), http.StatusNotFound)
+
+	rec = pollingRequest(srv, http.MethodGet, fmt.Sprintf("/debug/chat/%s/42/messages?name=ann", widgetBot), "")
+	for _, want := range []string{`<iframe class="widget"`, `sandbox="allow-scripts"`, `src="` + strings.ReplaceAll(page, "&", "&amp;") + `"`, `data-chat-data="&lt;/script&gt;&lt;b&gt;"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("messages lack %q: %s", want, rec.Body.String())
+		}
+	}
+}
+
+func TestDebugChatWidgetQuery(t *testing.T) {
+	srv := New(Config{Quiet: true})
+	startPolling(t, srv, widgetBot)
+	open := sendTestWidget(t, srv, `,"allow_queries":true`)
+	closed := sendTestWidget(t, srv, ``)
+	query := func(messageID int, data string) map[string]any {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/debug/chat/%s/42/widget/%d/query", widgetBot, messageID),
+			strings.NewReader(url.Values{"data": {data}, "name": {"ann"}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		srv.Handler().ServeHTTP(rec, req)
+		var out map[string]any
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("query status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		return out
+	}
+	// The bot answers each query with "re:<data>", or without data for "empty".
+	go func() {
+		for i := 0; i < 2; i++ {
+			rec := pollingRequest(srv, http.MethodGet, "/bot"+widgetBot+"/getUpdates?timeout=5", "")
+			var env struct {
+				Result []Update `json:"result"`
+			}
+			_ = json.Unmarshal(rec.Body.Bytes(), &env)
+			for _, u := range env.Result {
+				q := u.WidgetQuery
+				answer := `{"widget_query_id":"` + q.ID + `","data":"re:` + q.Data + `"}`
+				if q.Data == "empty" {
+					answer = `{"widget_query_id":"` + q.ID + `"}`
+				}
+				widgetCall(srv, "answerWidgetQuery", answer)
+				pollingRequest(srv, http.MethodGet, fmt.Sprintf("/bot%s/getUpdates?offset=%d", widgetBot, u.UpdateID+1), "")
+			}
+		}
+	}()
+
+	if got := query(open.MessageID, "ping"); got["result"] != "re:ping" || got["code"] != nil {
+		t.Fatalf("answer not passed to the widget: %v", got)
+	}
+	if got := query(open.MessageID, "empty"); got["result"] != nil || got["code"] != nil {
+		t.Fatalf("answer without data must resolve with null: %v", got)
+	}
+	if got := query(closed.MessageID, "x"); got["code"] != "NOT_ALLOWED" {
+		t.Fatalf("widget without allow_queries: %v", got)
+	}
+
+	// Exhaust the per-user limit through the debug inject endpoint.
+	bot := srv.Store().Bot(widgetBot)
+	bot.widgets.mu.Lock()
+	now := time.Now()
+	bot.widgets.sent[42] = []time.Time{now, now, now, now, now}
+	bot.widgets.mu.Unlock()
+	if got := query(open.MessageID, "x"); got["code"] != "RATE_LIMITED" {
+		t.Fatalf("flood must map to RATE_LIMITED: %v", got)
 	}
 }

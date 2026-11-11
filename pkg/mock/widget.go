@@ -88,8 +88,21 @@ type SharedWidgetQuery struct {
 type widgetRegistry struct {
 	mu      sync.Mutex
 	shared  map[string]*sharedWidget
-	queries map[string]time.Time  // widget_query_id → issued at
-	sent    map[int64][]time.Time // user id → recent query times
+	queries map[string]*pendingQuery // by widget_query_id
+	sent    map[int64][]time.Time    // user id → recent query times
+}
+
+// pendingQuery is an unanswered widget query. The debug chat waits on
+// answer to hand the bot's reply back to the widget.
+type pendingQuery struct {
+	issued time.Time
+	answer chan WidgetAnswer // buffered: answering never blocks
+}
+
+// WidgetAnswer is what the widget's request() resolves with: Result is nil
+// when the bot answered without data.
+type WidgetAnswer struct {
+	Result *string `json:"result"`
 }
 
 type sharedWidget struct {
@@ -135,21 +148,34 @@ func (r *widgetRegistry) setPublicData(id, data string, now time.Time) (wait tim
 }
 
 // registerQuery records an injected query id so answerWidgetQuery can
-// check it. Expired queries are dropped once the map is full.
-func (r *widgetRegistry) registerQuery(id string, now time.Time) {
+// check it, and returns the channel its answer arrives on. Expired queries
+// are dropped once the map is full.
+func (r *widgetRegistry) registerQuery(id string, now time.Time) <-chan WidgetAnswer {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.queries == nil {
-		r.queries = map[string]time.Time{}
+		r.queries = map[string]*pendingQuery{}
 	}
 	if len(r.queries) >= maxWidgetQueries {
-		for k, at := range r.queries {
-			if now.Sub(at) > widgetQueryTTL {
+		for k, q := range r.queries {
+			if now.Sub(q.issued) > widgetQueryTTL {
 				delete(r.queries, k)
 			}
 		}
 	}
-	r.queries[id] = now
+	q := &pendingQuery{issued: now, answer: make(chan WidgetAnswer, 1)}
+	r.queries[id] = q
+	return q.answer
+}
+
+// queryAnswer returns the answer channel of a registered query.
+func (r *widgetRegistry) queryAnswer(id string) <-chan WidgetAnswer {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if q, ok := r.queries[id]; ok {
+		return q.answer
+	}
+	return nil
 }
 
 // allowQuery counts a query from userID, refusing it once the user hit
@@ -182,16 +208,21 @@ func (r *widgetRegistry) allowQuery(userID int64, now time.Time) bool {
 	return true
 }
 
-// answerQuery consumes a query id; false means unknown, expired or answered.
-func (r *widgetRegistry) answerQuery(id string, now time.Time) bool {
+// answerQuery consumes a query id and passes the answer on; false means
+// unknown, expired or answered.
+func (r *widgetRegistry) answerQuery(id string, answer WidgetAnswer, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	at, ok := r.queries[id]
+	q, ok := r.queries[id]
 	if !ok {
 		return false
 	}
 	delete(r.queries, id)
-	return now.Sub(at) <= widgetQueryTTL
+	if now.Sub(q.issued) > widgetQueryTTL {
+		return false
+	}
+	q.answer <- answer
+	return true
 }
 
 // latestWidgetMessage returns the newest stored revision of a bot message
@@ -469,11 +500,15 @@ func (h *Handlers) AnswerWidgetQuery(c *gin.Context, bot *botEntry) {
 		errResp(c, http.StatusBadRequest, "Bad Request: widget_query_id is required")
 		return
 	}
-	if err := checkWidgetData("data", toString(body["data"])); err != nil {
-		errResp(c, http.StatusBadRequest, "Bad Request: "+err.Error())
-		return
+	var answer WidgetAnswer
+	if data, ok := optionalString(body, "data"); ok {
+		if err := checkWidgetData("data", data); err != nil {
+			errResp(c, http.StatusBadRequest, "Bad Request: "+err.Error())
+			return
+		}
+		answer.Result = &data
 	}
-	if !bot.widgets.answerQuery(queryID, time.Now()) {
+	if !bot.widgets.answerQuery(queryID, answer, time.Now()) {
 		errResp(c, http.StatusBadRequest, errQueryInvalid)
 		return
 	}
@@ -483,12 +518,12 @@ func (h *Handlers) AnswerWidgetQuery(c *gin.Context, bot *botEntry) {
 // fillWidgetQuery builds an injected widget_query or shared_widget_query.
 // The widget must exist and have been sent with allow_queries; queries over
 // the per-user limit return errWidgetQueryFlood and are not delivered.
-func (h *Handlers) fillWidgetQuery(upd *Update, bot *botEntry, req *InjectUpdateRequest, from User, chat Chat) error {
+func fillWidgetQuery(s *Store, upd *Update, bot *botEntry, req *InjectUpdateRequest, from User, chat Chat) error {
 	if n := len(req.WidgetData); n == 0 || n > maxWidgetQueryData {
 		return fmt.Errorf("widget_data must be 1-%d bytes", maxWidgetQueryData)
 	}
 	queryType := WidgetQueryType{Type: "data"}
-	id := h.Store.NextQueryID()
+	id := s.NextQueryID()
 	if req.Type == "shared_widget_query" {
 		if req.WidgetID == "" {
 			return errors.New("widget_id is required")
@@ -570,11 +605,10 @@ func optionalString(body map[string]any, key string) (string, bool) {
 	return toString(v), true
 }
 
-// renderWidget summarizes a widget for the debug chat: the mock does not
-// run widget HTML.
+// renderWidget summarizes a widget under its iframe in the debug chat.
 func renderWidget(w *Widget) template.HTML {
 	var b bytes.Buffer
-	b.WriteString(`<div class="widget-data">`)
+	b.WriteString(`<details class="widget-data"><summary>`)
 	fmt.Fprintf(&b, "html %d B", len(w.HTML))
 	if w.Width > 0 || w.Height > 0 {
 		fmt.Fprintf(&b, " · %d×%d", w.Width, w.Height)
@@ -582,13 +616,14 @@ func renderWidget(w *Widget) template.HTML {
 	if w.AllowQueries {
 		b.WriteString(" · queries")
 	}
+	b.WriteString("</summary>")
 	for _, field := range []struct{ name, value string }{
 		{"public_data", w.PublicData}, {"chat_data", w.ChatData},
 	} {
 		if field.value != "" {
-			b.WriteString("<br>" + field.name + ": <code>" + html.EscapeString(field.value) + "</code>")
+			b.WriteString(field.name + ": <code>" + html.EscapeString(field.value) + "</code><br>")
 		}
 	}
-	b.WriteString(`</div>`)
+	b.WriteString(`</details>`)
 	return template.HTML(b.String())
 }

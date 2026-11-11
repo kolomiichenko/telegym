@@ -383,8 +383,16 @@ fields up to 1024 bytes and a caption up to 1024 characters. `editSharedWidgetDa
 message with the widget, at most once per second. `answerWidgetQuery` accepts
 one answer per injected query within 15 seconds. As in Telegram, each user
 can send at most 5 widget queries per 5 seconds to a bot from all its widgets:
-further injected queries get a 429 and are not delivered. The mock does not run widget
-HTML, and Go's zlib output differs from Telegram's by a few bytes, so HTML
+further injected queries get a 429 and are not delivered.
+
+The debug chat runs widgets: each widget message shows the bot's HTML in a
+sandboxed iframe with no network, behind a `TelegramWidget` runtime that
+follows Widget SDK v1. Taps call `request()`, which reaches the bot as a
+`widget_query` from the chat's user and resolves with the bot's
+`answerWidgetQuery` (or rejects with `NOT_ALLOWED`, `BUSY`, `RATE_LIMITED`,
+`TIMEOUT` or `FAILED`); `chat_data` and `public_data` edits fire
+`chatDataChanged` and `publicDataChanged`. Wallet calls, previews and
+forwarded copies are not emulated. Go's zlib output differs from Telegram's by a few bytes, so HTML
 right at the 4096-byte limit may be judged differently. Telegram counts the
 caption after entities parsing; the mock counts it as sent, so `parse_mode`
 markup counts towards the limit.
