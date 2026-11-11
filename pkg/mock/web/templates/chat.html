@@ -211,20 +211,31 @@
   <script>
     // Widget bridge: the sandboxed widget iframes post requests here; they
     // go to the bot as widget queries and the answers go back to the widget.
+    // Widget code can post anything, so every message is checked here, not
+    // only by the runtime inside the iframe.
     (function () {
       const name = {{.Name | toJSON}};
       const frameOf = (source) =>
         [...document.querySelectorAll('iframe.widget')].find((f) => f.contentWindow === source);
       const send = (frame, m) => frame.contentWindow.postMessage(Object.assign({ tgw: 1 }, m), '*');
+      const safeURL = (url) => {
+        if (typeof url !== 'string' || url.length > 256) return null;
+        let u;
+        try { u = new URL(url); } catch (_) { return null; }
+        return u.protocol === 'https:' && !u.username && !u.password ? u.href : null;
+      };
 
       window.addEventListener('message', async (e) => {
         const m = e.data, frame = m && m.tgw && frameOf(e.source);
         if (!frame) return;
         switch (m.type) {
           case 'size':
-            if (!frame.hasAttribute('data-fixed-height')) frame.style.height = Math.max(m.height, 50) + 'px';
+            if (!frame.hasAttribute('data-fixed-height') && Number.isFinite(m.height)) {
+              frame.style.height = Math.min(Math.max(m.height, 50), 2000) + 'px';
+            }
             break;
           case 'request': {
+            if (typeof m.data !== 'string') break;
             let answer;
             try {
               const res = await fetch(frame.dataset.queryUrl, {
@@ -238,11 +249,15 @@
             send(frame, { type: 'answer', id: m.id, result: answer.result, code: answer.code });
             break;
           }
-          case 'open':
-            window.open(m.url, '_blank', 'noopener');
+          case 'open': {
+            const url = safeURL(m.url);
+            if (url) window.open(url, '_blank', 'noopener,noreferrer');
             break;
+          }
           case 'copy':
-            navigator.clipboard && navigator.clipboard.writeText(m.text).catch(() => {});
+            if (typeof m.text === 'string' && m.text.length >= 1 && m.text.length <= 256 && navigator.clipboard) {
+              navigator.clipboard.writeText(m.text).catch(() => {});
+            }
             break;
         }
       });
