@@ -8,8 +8,10 @@
   <script>
     // Rich message <details> blocks: keep the open/closed state the user
     // chose instead of resetting it to the server's on every poll morph.
+    // Widget iframes keep the height they report about their content.
     Idiomorph.defaults.callbacks.beforeAttributeUpdated = (attr, node) =>
-      !(attr === 'open' && node.tagName === 'DETAILS');
+      !(attr === 'open' && node.tagName === 'DETAILS') &&
+      !(attr === 'style' && node.tagName === 'IFRAME');
   </script>
   <style>
     * { box-sizing: border-box; }
@@ -93,6 +95,10 @@
     .media-tag { display: inline-block; padding: 0.15rem 0.4rem; font-size: 0.7rem; background: #f0f0f0; border-radius: 3px; color: #666; margin-bottom: 0.3rem; font-family: ui-monospace, monospace; }
     .media-tag.missing { background: #fff3cd; color: #856404; border: 1px dashed #d4a72c; }
     .msg.bot .media-tag { background: #f0f0f0; }
+    .widget-data { margin-top: 0.3rem; font-size: 0.75rem; color: #666; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    .widget-data summary { cursor: pointer; }
+    .msg.has-widget { width: min(75%, 420px); }
+    iframe.widget { display: block; border: 0; border-radius: 8px; max-width: 100%; background: transparent; }
     form#composer { display: flex; gap: 0.5rem; padding: 0.75rem; background: #fff; border-top: 1px solid #ddd; }
     form#composer input { flex: 1; padding: 0.55rem 0.75rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 18px; outline: none; }
     form#composer input:focus { border-color: #2a7fff; }
@@ -201,6 +207,84 @@
     text input. Populated via hx-swap-oob from the messages poll.
   */}}
   <div id="reply-kbd"></div>
+
+  <script>
+    // Widget bridge: the sandboxed widget iframes post requests here; they
+    // go to the bot as widget queries and the answers go back to the widget.
+    // Widget code can post anything, so every message is checked here, not
+    // only by the runtime inside the iframe.
+    (function () {
+      const name = {{.Name | toJSON}};
+      const frameOf = (source) =>
+        [...document.querySelectorAll('iframe.widget')].find((f) => f.contentWindow === source);
+      const send = (frame, m) => frame.contentWindow.postMessage(Object.assign({ tgw: 1 }, m), '*');
+      const safeURL = (url) => {
+        if (typeof url !== 'string' || url.length > 256) return null;
+        let u;
+        try { u = new URL(url); } catch (_) { return null; }
+        return u.protocol === 'https:' && !u.username && !u.password ? u.href : null;
+      };
+
+      window.addEventListener('message', async (e) => {
+        const m = e.data, frame = m && m.tgw && frameOf(e.source);
+        if (!frame) return;
+        switch (m.type) {
+          case 'size':
+            if (!frame.hasAttribute('data-fixed-height') && Number.isFinite(m.height)) {
+              frame.style.height = Math.min(Math.max(m.height, 50), 2000) + 'px';
+            }
+            // The runtime listens now: hand over edits that arrived while
+            // the widget was loading (it fires events only for changes).
+            if (!frame._listening) {
+              frame._listening = true;
+              syncData(frame, true);
+            }
+            break;
+          case 'request': {
+            if (typeof m.data !== 'string') break;
+            let answer;
+            try {
+              const res = await fetch(frame.dataset.queryUrl, {
+                method: 'POST',
+                body: new URLSearchParams({ data: m.data, name }),
+              });
+              answer = res.ok ? await res.json() : { code: 'FAILED' };
+            } catch (_) {
+              answer = { code: 'FAILED' };
+            }
+            send(frame, { type: 'answer', id: m.id, result: answer.result, code: answer.code });
+            break;
+          }
+          case 'open': {
+            const url = safeURL(m.url);
+            if (url) window.open(url, '_blank', 'noopener,noreferrer');
+            break;
+          }
+          case 'copy':
+            if (typeof m.text === 'string' && m.text.length >= 1 && m.text.length <= 256 && navigator.clipboard) {
+              navigator.clipboard.writeText(m.text).catch(() => {});
+            }
+            break;
+        }
+      });
+
+      // Edits of chat_data / public_data arrive with the messages poll and
+      // are posted once the widget's runtime is listening.
+      function syncData(frame, force) {
+        const chatData = frame.dataset.chatData || null, publicData = frame.dataset.publicData || null;
+        const sent = frame._sent;
+        if (force || !sent || sent.chatData !== chatData || sent.publicData !== publicData) {
+          frame._sent = { chatData, publicData };
+          send(frame, { type: 'data', chatData, publicData });
+        }
+      }
+      document.body.addEventListener('htmx:afterSettle', () => {
+        for (const frame of document.querySelectorAll('iframe.widget')) {
+          if (frame._listening) syncData(frame, false);
+        }
+      });
+    })();
+  </script>
 
   <script>
     // Record this chat opening into the per-browser MRU list shown on

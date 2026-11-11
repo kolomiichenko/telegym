@@ -45,6 +45,7 @@ type Message struct {
 	Caption     string       `json:"caption"`
 	Date        int64        `json:"date"`
 	ReplyMarkup *ReplyMarkup `json:"reply_markup,omitempty" js:"replyMarkup"`
+	Widget      *Widget      `json:"widget,omitempty"`
 
 	// EventSeq is the mock-internal monotonic counter - distinct on every
 	// AppendMessage even when MessageID collides (editMessage*). Used to
@@ -53,6 +54,13 @@ type Message struct {
 
 	LatencyMS float64 `json:"-" js:"latencyMs"`
 	user      *User   `json:"-"`
+}
+
+// Widget is the part of Message.widget scenarios assert on.
+type Widget struct {
+	ID         string `json:"id,omitempty"`
+	PublicData string `json:"public_data,omitempty" js:"publicData"`
+	ChatData   string `json:"chat_data,omitempty" js:"chatData"`
 }
 
 type ReplyMarkup struct {
@@ -152,6 +160,17 @@ func (u *User) React(emoji string) error {
 func (u *User) AnswerPoll(pollID string, optionIDs []int) error {
 	_, err := u.injectAs("poll_answer", map[string]any{"poll_id": pollID, "option_ids": optionIDs})
 	return err
+}
+
+// TapWidget injects a widget query with data from the widget in the most
+// recently matched bot message and returns its id.
+func (u *User) TapWidget(data string) (string, error) {
+	return u.injectAs("widget_query", map[string]any{"message_id": u.lastSeenMessageID, "widget_data": data})
+}
+
+// TapSharedWidget injects a shared widget query with data and returns its id.
+func (u *User) TapSharedWidget(widgetID, data string) (string, error) {
+	return u.injectAs("shared_widget_query", map[string]any{"widget_id": widgetID, "widget_data": data})
 }
 
 // SendPhoto injects a photo message referencing fileID.
@@ -343,9 +362,10 @@ func (u *User) post(body map[string]any) (string, error) {
 		CallbackQueryID    string `json:"callback_query_id"`
 		InlineQueryID      string `json:"inline_query_id"`
 		PreCheckoutQueryID string `json:"pre_checkout_query_id"`
+		WidgetQueryID      string `json:"widget_query_id"`
 	}
 	_ = json.NewDecoder(resp.Body).Decode(&out)
-	id := cmp.Or(out.CallbackQueryID, out.InlineQueryID, out.PreCheckoutQueryID)
+	id := cmp.Or(out.CallbackQueryID, out.InlineQueryID, out.PreCheckoutQueryID, out.WidgetQueryID)
 	if id != "" {
 		u.queryIDs[id] = struct{}{}
 	}
@@ -359,7 +379,7 @@ func (u *User) post(body map[string]any) (string, error) {
 const awaitRequestWindow = 1000
 
 // queryIDParams are the Bot API parameters that answer a query a user injected.
-var queryIDParams = []string{"callback_query_id", "inline_query_id", "pre_checkout_query_id"}
+var queryIDParams = []string{"callback_query_id", "inline_query_id", "pre_checkout_query_id", "widget_query_id"}
 
 // ownsRequest reports whether a journal entry can belong to this user. Calls
 // tied to neither a chat nor a query, such as getMe, match every user.

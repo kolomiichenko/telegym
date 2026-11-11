@@ -77,6 +77,8 @@ type botEntry struct {
 	topicsMu sync.Mutex
 	topics   map[int64][]ForumTopic
 
+	widgets widgetRegistry
+
 	requestMu sync.RWMutex
 	requests  []APIRequest
 

@@ -58,7 +58,7 @@
   {{if .TopicCreated}}
   <div class="msg service">The topic <a href="{{.TopicHref}}">{{.TopicCreated}}</a> was created <span class="ts">{{.Stamp}}</span></div>
   {{else}}
-  <div class="msg {{.Side}}">
+  <div class="msg {{.Side}}{{with .Widget}}{{if not .Width}} has-widget{{end}}{{end}}">
     {{if .TopicLabel}}<span class="topic-label">{{.TopicLabel}}</span>{{end}}
     {{if .StickerEmoji}}
       <div class="sticker-big" title="sticker {{.StickerFileID}}">{{.StickerEmoji}}</div>
@@ -66,6 +66,11 @@
       <span class="sticker-id" title="bot sent a sticker by cached file_id; no emoji metadata available in mock">🎴 {{.StickerFileID}}</span>
     {{else if .PhotoURL}}
       <a href="{{.PhotoURL}}" target="_blank" rel="noopener"><img class="msg-photo" src="{{.PhotoURL}}" alt="photo"></a>
+    {{else if .Widget}}
+      {{with .Widget}}<iframe class="widget" id="{{.FrameID}}" src="{{.URL}}" sandbox="allow-scripts" title="widget"
+              data-query-url="{{.QueryURL}}" data-chat-data="{{.ChatData}}" data-public-data="{{.PublicData}}"
+              {{if .Height}}data-fixed-height{{end}}
+              style="width: {{if .Width}}{{.Width}}px{{else}}100%{{end}}; height: {{if .Height}}{{.Height}}{{else}}120{{end}}px"></iframe>{{end}}
     {{else if .MediaTag}}
       <span class="media-tag">{{.MediaTag}}</span>
     {{end}}

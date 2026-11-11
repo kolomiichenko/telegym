@@ -96,6 +96,18 @@ func toString(v any) string {
 	return ""
 }
 
+// toBool reads a Boolean sent as JSON or as a form field.
+func toBool(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		b, _ := strconv.ParseBool(x)
+		return b
+	}
+	return false
+}
+
 // rawJSON reads a structured parameter from JSON or a JSON-encoded form field.
 func rawJSON(v any) ([]byte, error) {
 	if s, ok := v.(string); ok {
@@ -276,12 +288,19 @@ func (h *Handlers) EditMessageReplyMarkup(c *gin.Context, bot *botEntry) {
 		errResp(c, 400, "Bad Request: "+err.Error())
 		return
 	}
+	markup := parseReplyMarkup(body["reply_markup"])
+	if m, ok := bot.editWidgetMessage(toInt64(body["chat_id"]), toInt(body["message_id"]), func(m *Message) {
+		m.ReplyMarkup = markup
+	}); ok {
+		c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
+		return
+	}
 	m := Message{
 		MessageID:   toInt(body["message_id"]),
 		From:        &bot.identity,
 		Date:        time.Now().Unix(),
 		Chat:        Chat{ID: toInt64(body["chat_id"]), Type: "private"},
-		ReplyMarkup: parseReplyMarkup(body["reply_markup"]),
+		ReplyMarkup: markup,
 	}
 	bot.AppendMessage(m)
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
@@ -295,6 +314,16 @@ func (h *Handlers) EditMessageCaption(c *gin.Context, bot *botEntry) {
 	}
 	if toString(body["inline_message_id"]) != "" {
 		c.JSON(http.StatusOK, APIResponse{OK: true, Result: true})
+		return
+	}
+
+	if m, ok := bot.editWidgetMessage(toInt64(body["chat_id"]), toInt(body["message_id"]), func(m *Message) {
+		m.Caption = toString(body["caption"])
+		m.CaptionEntities = parseEntities(body["caption_entities"])
+		m.ReplyMarkup = parseReplyMarkup(body["reply_markup"])
+		m.ParseMode = toString(body["parse_mode"])
+	}); ok {
+		c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
 		return
 	}
 

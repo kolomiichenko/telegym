@@ -337,13 +337,7 @@ func (s *Server) faultsMiddleware() gin.HandlerFunc {
 		}
 		chatID, paid := floodKey(c)
 		if wait := limiter.allow(token, chatID, paid); wait > 0 {
-			retryAfter := max(1, int(math.Ceil(wait.Seconds())))
-			c.AbortWithStatusJSON(http.StatusTooManyRequests, APIResponse{
-				OK:          false,
-				ErrorCode:   http.StatusTooManyRequests,
-				Description: "Too Many Requests: retry after " + strconv.Itoa(retryAfter),
-				Parameters:  &ResponseParameters{RetryAfter: retryAfter},
-			})
+			tooManyRequests(c, wait)
 			return
 		}
 		c.Next()
@@ -351,6 +345,18 @@ func (s *Server) faultsMiddleware() gin.HandlerFunc {
 			s.metrics.PaidBroadcastMessagesTotal.Inc()
 		}
 	}
+}
+
+// tooManyRequests answers a flood with 429 and retry_after in whole
+// seconds, rounded up as Telegram does.
+func tooManyRequests(c *gin.Context, wait time.Duration) {
+	retryAfter := max(1, int(math.Ceil(wait.Seconds())))
+	c.AbortWithStatusJSON(http.StatusTooManyRequests, APIResponse{
+		OK:          false,
+		ErrorCode:   http.StatusTooManyRequests,
+		Description: "Too Many Requests: retry after " + strconv.Itoa(retryAfter),
+		Parameters:  &ResponseParameters{RetryAfter: retryAfter},
+	})
 }
 
 // latency picks a delay in [LatencyMin, LatencyMax].

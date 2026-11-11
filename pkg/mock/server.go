@@ -263,6 +263,8 @@ func (s *Server) registerBotAPI(g *gin.RouterGroup) {
 	g.POST("/sendAnimation", s.withBot(s.handlers.SendAnimation))
 	g.POST("/sendSticker", s.withBot(s.handlers.SendSticker))
 	g.POST("/sendDice", s.withBot(s.handlers.SendDice))
+	g.POST("/sendWidget", s.withBot(s.handlers.SendWidget))
+	g.POST("/sendSharedWidget", s.withBot(s.handlers.SendSharedWidget))
 	g.POST("/editMessageText", s.withBot(s.handlers.EditMessageText))
 	g.POST("/editMessageCaption", s.withBot(s.handlers.EditMessageCaption))
 	g.POST("/editMessageReplyMarkup", s.withBot(s.handlers.EditMessageReplyMarkup))
@@ -272,6 +274,9 @@ func (s *Server) registerBotAPI(g *gin.RouterGroup) {
 	g.POST("/deleteMessage", s.withBot(s.handlers.DeleteMessage))
 	g.POST("/answerCallbackQuery", s.withBot(s.handlers.AnswerCallbackQuery))
 	g.POST("/sendChatAction", s.withBot(s.handlers.SendChatAction))
+	g.POST("/editMessageWidgetData", s.withBot(s.handlers.EditMessageWidgetData))
+	g.POST("/editSharedWidgetData", s.withBot(s.handlers.EditSharedWidgetData))
+	g.POST("/answerWidgetQuery", s.withBot(s.handlers.AnswerWidgetQuery))
 
 	// Forum topics
 	g.POST("/createForumTopic", s.withBot(s.handlers.CreateForumTopic))

@@ -44,6 +44,16 @@ func TestUserInjectHelpers(t *testing.T) {
 			map[string]any{"type": "poll_answer", "poll_id": "p1", "option_ids": []any{float64(1)}},
 		},
 		{
+			"widget tap targets the last matched message",
+			func(u *User) error { u.lastSeenMessageID = 77; _, err := u.TapWidget("tap"); return err },
+			map[string]any{"type": "widget_query", "message_id": float64(77), "widget_data": "tap"},
+		},
+		{
+			"shared widget tap",
+			func(u *User) error { _, err := u.TapSharedWidget("w1", "tap"); return err },
+			map[string]any{"type": "shared_widget_query", "widget_id": "w1", "widget_data": "tap"},
+		},
+		{
 			"photo",
 			func(u *User) error { return u.SendPhoto("ph1", "look") },
 			map[string]any{"type": "message", "photo": []any{map[string]any{"file_id": "ph1"}}, "caption": "look"},
@@ -102,6 +112,10 @@ func TestAwaitRequestScopedToInjectedQueries(t *testing.T) {
 		{
 			"pre-checkout", "pre_checkout_query_id", "pre_checkout_query_id", "answerPreCheckoutQuery",
 			func(u *User) (string, error) { return u.PreCheckout("order", 5, "") },
+		},
+		{
+			"widget", "widget_query_id", "widget_query_id", "answerWidgetQuery",
+			func(u *User) (string, error) { return u.TapWidget("tap") },
 		},
 	}
 	for _, tt := range tests {

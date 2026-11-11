@@ -246,6 +246,8 @@ const p = u.preCheckout('order-1', 150); // returns the pre_checkout_query_id
 u.pay('order-1', 150);                // successful_payment; currency defaults to XTR
 u.react('👍');                         // on the most recently matched bot message
 u.answerPoll('poll-1', [0, 2]);       // no options retracts the vote
+const w = u.tapWidget('data');        // widget_query on the last matched message; returns its id
+u.tapSharedWidget('widget-id', 'data'); // shared_widget_query; returns its id
 u.sendPhoto('file-id', 'caption');
 u.sendDocument('file-id', 'cv.pdf', 'caption');
 u.sendContact('+380501234567');
@@ -267,9 +269,11 @@ Every request needs `token` and `chat_id` or `user_id`; `type` defaults to
 | `pre_checkout_query`, `successful_payment` | `total_amount`, `invoice_payload` (both required), `currency` (default `XTR`) |
 | `message_reaction` | `message_id` (required), `old_reaction`, `new_reaction`: arrays of emoji |
 | `poll_answer` | `poll_id` (required), `option_ids` |
+| `widget_query` | `message_id` of a widget sent with `allow_queries`, `widget_data` (1-64 bytes) |
+| `shared_widget_query` | `widget_id` of a shared widget sent with `allow_queries`, `widget_data` (1-64 bytes) |
 
-The response includes `callback_query_id`, `inline_query_id` or
-`pre_checkout_query_id` when the update has one. Injected `file_id`s are only
+The response includes `callback_query_id`, `inline_query_id`,
+`pre_checkout_query_id` or `widget_query_id` when the update has one. Injected `file_id`s are only
 references: `getFile` answers with a zero-value `File`, because the mock has no
 bytes for them.
 
@@ -371,6 +375,27 @@ shape-valid JSON. Coverage breaks down in two layers:
   `getChat → Chat`, `forwardMessage → Message`, `copyMessage → MessageId`,
   `createChatInviteLink → ChatInviteLink`, `getStickerSet → StickerSet`, etc.
   all parse cleanly in any Bot API client.
+
+Widgets (Bot API 10.4) have explicit handlers that enforce the published
+limits: `sendWidget` and `sendSharedWidget` go to private chats only, as in
+production, with HTML up to 32768 bytes and 4096 bytes after zlib, data
+fields up to 1024 bytes and a caption up to 1024 characters. `editSharedWidgetData` changes `public_data` on every
+message with the widget, at most once per second. `answerWidgetQuery` accepts
+one answer per injected query within 15 seconds. As in Telegram, each user
+can send at most 5 widget queries per 5 seconds to a bot from all its widgets:
+further injected queries get a 429 and are not delivered.
+
+The debug chat runs widgets: each widget message shows the bot's HTML in a
+sandboxed iframe with no network, behind a `TelegramWidget` runtime that
+follows Widget SDK v1. Taps call `request()`, which reaches the bot as a
+`widget_query` from the chat's user and resolves with the bot's
+`answerWidgetQuery` (or rejects with `NOT_ALLOWED`, `BUSY`, `RATE_LIMITED`,
+`TIMEOUT` or `FAILED`); `chat_data` and `public_data` edits fire
+`chatDataChanged` and `publicDataChanged`. Wallet calls, previews and
+forwarded copies are not emulated. Go's zlib output differs from Telegram's by a few bytes, so HTML
+right at the 4096-byte limit may be judged differently. Telegram counts the
+caption after entities parsing; the mock counts it as sent, so `parse_mode`
+markup counts towards the limit.
 
 A weekly workflow refreshes the spec and opens a PR whose description
 summarises the change: methods with explicit handlers that changed (the
