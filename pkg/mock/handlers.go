@@ -96,6 +96,18 @@ func toString(v any) string {
 	return ""
 }
 
+// toBool reads a Boolean sent as JSON or as a form field.
+func toBool(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		b, _ := strconv.ParseBool(x)
+		return b
+	}
+	return false
+}
+
 // rawJSON reads a structured parameter from JSON or a JSON-encoded form field.
 func rawJSON(v any) ([]byte, error) {
 	if s, ok := v.(string); ok {

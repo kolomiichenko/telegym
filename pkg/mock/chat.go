@@ -644,16 +644,23 @@ func linkifyCommands(escaped, token string, chatID int64, name string) string {
 }
 
 // renderMessageText renders a bot message body: a sendRichMessage body,
-// Telegram HTML when the bot sent parse_mode=HTML, plain text otherwise.
+// Telegram HTML when the bot sent parse_mode=HTML, plain text otherwise,
+// followed by a widget summary.
 func renderMessageText(m Message, token string, chatID int64, name string) template.HTML {
 	if m.RichMessage != nil {
 		return renderRichMessage(m.RichMessage, token, chatID, name)
 	}
 	text := pickText(m)
+	var out template.HTML
 	if text != "" && strings.EqualFold(m.ParseMode, "HTML") {
-		return renderTelegramHTML(text, token, chatID, name)
+		out = renderTelegramHTML(text, token, chatID, name)
+	} else {
+		out = renderTextWithCommands(text, token, chatID, name)
 	}
-	return renderTextWithCommands(text, token, chatID, name)
+	if m.Widget != nil {
+		out += renderWidget(m.Widget)
+	}
+	return out
 }
 
 func pickText(m Message) string {
@@ -675,6 +682,8 @@ func mediaTag(m Message) string {
 		return "sticker"
 	case m.Dice != nil:
 		return "dice"
+	case m.Widget != nil:
+		return "widget"
 	}
 	return ""
 }

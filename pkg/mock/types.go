@@ -72,6 +72,10 @@ type Message struct {
 
 	ForumTopicCreated *ForumTopicCreated `json:"forum_topic_created,omitempty"`
 	RichMessage       *RichMessage       `json:"rich_message,omitempty"`
+	Widget            *Widget            `json:"widget,omitempty"`
+
+	HasProtectedContent   bool `json:"has_protected_content,omitempty"`
+	ShowCaptionAboveMedia bool `json:"show_caption_above_media,omitempty"`
 
 	// EventSeq is a mock-internal monotonic counter, incremented on every
 	// AppendMessage. Two entries with the same MessageID (a bot send
@@ -303,6 +307,8 @@ type Update struct {
 	PreCheckoutQuery   *PreCheckoutQuery       `json:"pre_checkout_query,omitempty"`
 	MessageReaction    *MessageReactionUpdated `json:"message_reaction,omitempty"`
 	PollAnswer         *PollAnswer             `json:"poll_answer,omitempty"`
+	WidgetQuery        *WidgetQuery            `json:"widget_query,omitempty"`
+	SharedWidgetQuery  *SharedWidgetQuery      `json:"shared_widget_query,omitempty"`
 }
 
 // WebhookInfo mirrors the response of getWebhookInfo.

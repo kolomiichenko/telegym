@@ -1,6 +1,7 @@
 package mock
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -64,6 +65,11 @@ type InjectUpdateRequest struct {
 	// Poll-answer-shaped update. Empty OptionIDs retracts the vote.
 	PollID    string `json:"poll_id"`
 	OptionIDs []int  `json:"option_ids"`
+
+	// Widget-query-shaped updates: widget_query targets the widget in
+	// MessageID, shared_widget_query the shared widget WidgetID.
+	WidgetData string `json:"widget_data"`
+	WidgetID   string `json:"widget_id"`
 }
 
 func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
@@ -146,6 +152,15 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 		} else {
 			upd.Message = message
 		}
+	case "widget_query", "shared_widget_query":
+		if err := h.fillWidgetQuery(&upd, bot, &req, from, chat); err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, errWidgetQueryFlood) {
+				status = http.StatusTooManyRequests
+			}
+			c.JSON(status, gin.H{"error": err.Error()})
+			return
+		}
 	case "chat_member":
 		if !supportedMemberStatus(req.OldStatus) || !supportedMemberStatus(req.NewStatus) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "old_status and new_status must be member, left or kicked"})
@@ -193,6 +208,12 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 	}
 	if upd.PreCheckoutQuery != nil {
 		resp["pre_checkout_query_id"] = upd.PreCheckoutQuery.ID
+	}
+	if upd.WidgetQuery != nil {
+		resp["widget_query_id"] = upd.WidgetQuery.ID
+	}
+	if upd.SharedWidgetQuery != nil {
+		resp["widget_query_id"] = upd.SharedWidgetQuery.ID
 	}
 	c.JSON(http.StatusOK, resp)
 }
