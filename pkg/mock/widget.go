@@ -90,6 +90,10 @@ type widgetRegistry struct {
 	shared  map[string]*sharedWidget
 	queries map[string]*pendingQuery // by widget_query_id
 	sent    map[int64][]time.Time    // user id → recent query times
+	// pruned is when the maps above were last swept; a full map is swept
+	// at most once per widgetQueryWindow, so live entries cost no scan
+	// per query.
+	pruned time.Time
 }
 
 // pendingQuery is an unanswered widget query. The debug chat waits on
@@ -148,52 +152,47 @@ func (r *widgetRegistry) setPublicData(id, data string, now time.Time) (wait tim
 }
 
 // registerQuery records an injected query id so answerWidgetQuery can
-// check it, and returns the channel its answer arrives on. Expired queries
-// are dropped once the map is full.
+// check it, and returns the channel its answer arrives on.
 func (r *widgetRegistry) registerQuery(id string, now time.Time) <-chan WidgetAnswer {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.queries == nil {
 		r.queries = map[string]*pendingQuery{}
 	}
-	if len(r.queries) >= maxWidgetQueries {
-		for k, q := range r.queries {
-			if now.Sub(q.issued) > widgetQueryTTL {
-				delete(r.queries, k)
-			}
-		}
-	}
+	r.prune(now)
 	q := &pendingQuery{issued: now, answer: make(chan WidgetAnswer, 1)}
 	r.queries[id] = q
 	return q.answer
 }
 
-// queryAnswer returns the answer channel of a registered query.
-func (r *widgetRegistry) queryAnswer(id string) <-chan WidgetAnswer {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if q, ok := r.queries[id]; ok {
-		return q.answer
+// prune drops expired queries and idle users once either map is full.
+// Callers hold r.mu.
+func (r *widgetRegistry) prune(now time.Time) {
+	if len(r.queries) < maxWidgetQueries && len(r.sent) < maxWidgetQueries || now.Sub(r.pruned) < widgetQueryWindow {
+		return
 	}
-	return nil
+	r.pruned = now
+	for k, q := range r.queries {
+		if now.Sub(q.issued) > widgetQueryTTL {
+			delete(r.queries, k)
+		}
+	}
+	for id, times := range r.sent {
+		if now.Sub(times[len(times)-1]) >= widgetQueryWindow {
+			delete(r.sent, id)
+		}
+	}
 }
 
 // allowQuery counts a query from userID, refusing it once the user hit
-// the per-user limit. Users idle for a full window are dropped once the
-// map is full.
+// the per-user limit.
 func (r *widgetRegistry) allowQuery(userID int64, now time.Time) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sent == nil {
 		r.sent = map[int64][]time.Time{}
 	}
-	if len(r.sent) >= maxWidgetQueries {
-		for id, times := range r.sent {
-			if now.Sub(times[len(times)-1]) >= widgetQueryWindow {
-				delete(r.sent, id)
-			}
-		}
-	}
+	r.prune(now)
 	recent := r.sent[userID][:0:0]
 	for _, at := range r.sent[userID] {
 		if now.Sub(at) < widgetQueryWindow {
@@ -241,6 +240,22 @@ func (b *botEntry) latestWidgetMessage(chatID int64, messageID int) (Message, bo
 		}
 	}
 	return Message{}, false
+}
+
+// editWidgetMessage stores an edit of a widget message as a full revision,
+// unlike the partial revisions of other edits, so the widget, caption and
+// markup survive each other's edits. It reports false for messages without
+// a widget.
+func (b *botEntry) editWidgetMessage(chatID int64, messageID int, edit func(*Message)) (Message, bool) {
+	m, ok := b.latestWidgetMessage(chatID, messageID)
+	if !ok {
+		return Message{}, false
+	}
+	edit(&m)
+	m.Date = time.Now().Unix()
+	m.isNew = false
+	b.AppendMessage(m)
+	return m, true
 }
 
 // setSharedPublicData updates public_data in place on every stored message
@@ -425,11 +440,7 @@ func (h *Handlers) EditMessageWidgetData(c *gin.Context, bot *botEntry) {
 	if setPublic {
 		w.PublicData = publicData
 	}
-	// Store the edit as a full revision, like the other edit handlers.
-	m.Widget = &w
-	m.Date = time.Now().Unix()
-	m.isNew = false
-	bot.AppendMessage(m)
+	bot.editWidgetMessage(chatID, messageID, func(m *Message) { m.Widget = &w })
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: true})
 }
 
@@ -474,13 +485,7 @@ func (h *Handlers) editSharedPublicData(c *gin.Context, bot *botEntry, widgetID,
 		return false
 	}
 	if wait > 0 {
-		retryAfter := max(1, int(wait.Round(time.Second)/time.Second))
-		c.JSON(http.StatusTooManyRequests, APIResponse{
-			OK:          false,
-			ErrorCode:   http.StatusTooManyRequests,
-			Description: "Too Many Requests: retry after " + strconv.Itoa(retryAfter),
-			Parameters:  &ResponseParameters{RetryAfter: retryAfter},
-		})
+		tooManyRequests(c, wait)
 		return false
 	}
 	bot.setSharedPublicData(widgetID, data)
@@ -515,39 +520,40 @@ func (h *Handlers) AnswerWidgetQuery(c *gin.Context, bot *botEntry) {
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: true})
 }
 
-// fillWidgetQuery builds an injected widget_query or shared_widget_query.
-// The widget must exist and have been sent with allow_queries; queries over
-// the per-user limit return errWidgetQueryFlood and are not delivered.
-func fillWidgetQuery(s *Store, upd *Update, bot *botEntry, req *InjectUpdateRequest, from User, chat Chat) error {
+// fillWidgetQuery builds an injected widget_query or shared_widget_query and
+// returns the channel its answer arrives on. The widget must exist and have
+// been sent with allow_queries; queries over the per-user limit return
+// errWidgetQueryFlood and are not delivered.
+func fillWidgetQuery(s *Store, upd *Update, bot *botEntry, req *InjectUpdateRequest, from User, chat Chat) (<-chan WidgetAnswer, error) {
 	if n := len(req.WidgetData); n == 0 || n > maxWidgetQueryData {
-		return fmt.Errorf("widget_data must be 1-%d bytes", maxWidgetQueryData)
+		return nil, fmt.Errorf("widget_data must be 1-%d bytes", maxWidgetQueryData)
 	}
 	queryType := WidgetQueryType{Type: "data"}
 	id := s.NextQueryID()
 	if req.Type == "shared_widget_query" {
 		if req.WidgetID == "" {
-			return errors.New("widget_id is required")
+			return nil, errors.New("widget_id is required")
 		}
 		w, ok := bot.widgets.lookupShared(req.WidgetID)
 		if !ok {
-			return errors.New("shared widget not found")
+			return nil, errors.New("shared widget not found")
 		}
 		if !w.AllowQueries {
-			return errors.New("widget was sent without allow_queries")
+			return nil, errors.New("widget was sent without allow_queries")
 		}
 		upd.SharedWidgetQuery = &SharedWidgetQuery{
 			ID: id, From: from, Type: queryType, Data: req.WidgetData, WidgetID: req.WidgetID,
 		}
 	} else {
 		if req.MessageID == 0 {
-			return errors.New("message_id is required")
+			return nil, errors.New("message_id is required")
 		}
 		m, ok := bot.latestWidgetMessage(chat.ID, req.MessageID)
 		if !ok {
-			return errors.New("no widget message with this message_id")
+			return nil, errors.New("no widget message with this message_id")
 		}
 		if !m.Widget.AllowQueries {
-			return errors.New("widget was sent without allow_queries")
+			return nil, errors.New("widget was sent without allow_queries")
 		}
 		upd.WidgetQuery = &WidgetQuery{
 			ID:           id,
@@ -563,23 +569,43 @@ func fillWidgetQuery(s *Store, upd *Update, bot *botEntry, req *InjectUpdateRequ
 	now := time.Now()
 	if !bot.widgets.allowQuery(from.ID, now) {
 		upd.WidgetQuery, upd.SharedWidgetQuery = nil, nil
-		return errWidgetQueryFlood
+		return nil, errWidgetQueryFlood
 	}
-	bot.widgets.registerQuery(id, now)
-	return nil
+	return bot.widgets.registerQuery(id, now), nil
+}
+
+// zlibWriters reuses compressors: each holds hundreds of KB of state.
+var zlibWriters = sync.Pool{New: func() any {
+	zw, _ := zlib.NewWriterLevel(nil, zlib.BestCompression)
+	return zw
+}}
+
+// countingWriter counts the bytes written to it.
+type countingWriter int
+
+func (n *countingWriter) Write(p []byte) (int, error) {
+	*n += countingWriter(len(p))
+	return len(p), nil
 }
 
 func checkWidgetHTML(s string) error {
 	if s == "" || len(s) > maxWidgetHTML {
 		return fmt.Errorf("widget html must be 1-%d bytes", maxWidgetHTML)
 	}
+	// Deflate falls back to stored blocks, so zlib never grows the input by
+	// more than its 11 bytes of framing: short HTML needs no compression.
+	if len(s)+11 <= maxWidgetHTMLCompressed {
+		return nil
+	}
 	// Telegram compresses with PHP's gzcompress; Go's zlib output differs
 	// by a few bytes, so payloads right at the limit may disagree.
-	var buf bytes.Buffer
-	zw, _ := zlib.NewWriterLevel(&buf, zlib.BestCompression)
+	var size countingWriter
+	zw := zlibWriters.Get().(*zlib.Writer)
+	zw.Reset(&size)
 	_, _ = zw.Write([]byte(s))
 	_ = zw.Close()
-	if buf.Len() > maxWidgetHTMLCompressed {
+	zlibWriters.Put(zw)
+	if size > maxWidgetHTMLCompressed {
 		return fmt.Errorf("widget html must not exceed %d bytes compressed", maxWidgetHTMLCompressed)
 	}
 	return nil

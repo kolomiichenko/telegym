@@ -153,7 +153,7 @@ func (h *Handlers) DebugInjectUpdate(c *gin.Context) {
 			upd.Message = message
 		}
 	case "widget_query", "shared_widget_query":
-		if err := fillWidgetQuery(h.Store, &upd, bot, &req, from, chat); err != nil {
+		if _, err := fillWidgetQuery(h.Store, &upd, bot, &req, from, userChat); err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, errWidgetQueryFlood) {
 				status = http.StatusTooManyRequests

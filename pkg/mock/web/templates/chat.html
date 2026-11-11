@@ -233,6 +233,12 @@
             if (!frame.hasAttribute('data-fixed-height') && Number.isFinite(m.height)) {
               frame.style.height = Math.min(Math.max(m.height, 50), 2000) + 'px';
             }
+            // The runtime listens now: hand over edits that arrived while
+            // the widget was loading (it fires events only for changes).
+            if (!frame._listening) {
+              frame._listening = true;
+              syncData(frame, true);
+            }
             break;
           case 'request': {
             if (typeof m.data !== 'string') break;
@@ -262,16 +268,19 @@
         }
       });
 
-      // Edits of chat_data / public_data arrive with the messages poll.
+      // Edits of chat_data / public_data arrive with the messages poll and
+      // are posted once the widget's runtime is listening.
+      function syncData(frame, force) {
+        const chatData = frame.dataset.chatData || null, publicData = frame.dataset.publicData || null;
+        const sent = frame._sent;
+        if (force || !sent || sent.chatData !== chatData || sent.publicData !== publicData) {
+          frame._sent = { chatData, publicData };
+          send(frame, { type: 'data', chatData, publicData });
+        }
+      }
       document.body.addEventListener('htmx:afterSettle', () => {
         for (const frame of document.querySelectorAll('iframe.widget')) {
-          const chatData = frame.dataset.chatData || null, publicData = frame.dataset.publicData || null;
-          if (frame._sent === undefined) {
-            frame._sent = { chatData, publicData }; // the page was served with these
-          } else if (frame._sent.chatData !== chatData || frame._sent.publicData !== publicData) {
-            frame._sent = { chatData, publicData };
-            send(frame, { type: 'data', chatData, publicData });
-          }
+          if (frame._listening) syncData(frame, false);
         }
       });
     })();

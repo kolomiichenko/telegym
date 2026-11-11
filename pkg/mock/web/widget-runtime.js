@@ -121,10 +121,18 @@
     }
   });
 
-  // The parent sizes the iframe to the content of a widget without a fixed height.
+  // The parent sizes the iframe to the content of a widget without a fixed
+  // height. The size comes from the content, not the body box, so a body
+  // that follows the viewport (min-height: 100vh) cannot grow the iframe in
+  // a loop.
   const reportSize = () => {
     const b = document.body, s = getComputedStyle(b);
-    post({ type: 'size', height: Math.ceil(b.offsetHeight + parseFloat(s.marginTop) + parseFloat(s.marginBottom)) });
+    let bottom = parseFloat(s.paddingTop) + b.getBoundingClientRect().top;
+    for (const el of b.children) {
+      const r = el.getBoundingClientRect();
+      if (r.width || r.height) bottom = Math.max(bottom, r.bottom + parseFloat(getComputedStyle(el).marginBottom));
+    }
+    post({ type: 'size', height: Math.ceil(bottom + window.scrollY + parseFloat(s.paddingBottom) + parseFloat(s.marginBottom)) });
   };
   document.addEventListener('DOMContentLoaded', () => {
     new ResizeObserver(reportSize).observe(document.body);

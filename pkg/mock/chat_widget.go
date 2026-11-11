@@ -22,8 +22,11 @@ import (
 var widgetRuntimeJS string
 
 // widgetCSP mirrors the Telegram sandbox: inline code and data: assets only,
-// no network. The sandbox directive gives the page an opaque origin even when
-// opened directly, outside the chat's sandboxed iframe.
+// no fetch, XHR or subresource loads. CSP cannot stop the frame navigating
+// itself, which the real sandbox does; the mock runs the bot's own widget,
+// so that gap only matters for widgets that misbehave. The sandbox directive
+// gives the page an opaque origin even when opened directly, outside the
+// chat's sandboxed iframe.
 const widgetCSP = "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:; media-src data:"
 
 // widgetVM places a widget message's iframe in the debug chat.
@@ -95,7 +98,8 @@ func (h *chatHandlers) widgetQuery(c *gin.Context) {
 	chat := Chat{ID: chatID, Type: "private", FirstName: name, Username: name}
 	req := InjectUpdateRequest{Type: "widget_query", MessageID: messageID, WidgetData: c.PostForm("data")}
 	var upd Update
-	if err := fillWidgetQuery(h.store, &upd, bot, &req, from, chat); err != nil {
+	answer, err := fillWidgetQuery(h.store, &upd, bot, &req, from, chat)
+	if err != nil {
 		code := "NOT_ALLOWED"
 		if errors.Is(err, errWidgetQueryFlood) {
 			code = "RATE_LIMITED"
@@ -103,7 +107,6 @@ func (h *chatHandlers) widgetQuery(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"code": code, "error": err.Error()})
 		return
 	}
-	answer := bot.widgets.queryAnswer(upd.WidgetQuery.ID)
 	if _, err := h.dispatcher.DeliverUpdate(c.Request.Context(), bot, upd); err != nil {
 		c.JSON(http.StatusOK, gin.H{"code": "FAILED", "error": err.Error()})
 		return

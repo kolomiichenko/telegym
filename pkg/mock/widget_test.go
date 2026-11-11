@@ -473,3 +473,56 @@ func TestDebugChatWidgetQuery(t *testing.T) {
 		t.Fatalf("flood must map to RATE_LIMITED: %v", got)
 	}
 }
+
+func TestWidgetSurvivesCaptionAndMarkupEdits(t *testing.T) {
+	srv := New(Config{Quiet: true})
+	m := sendTestWidget(t, srv, `,"caption":"v1","chat_data":"c1"`)
+	edit := func(method, fields string) {
+		t.Helper()
+		wantStatus(t, widgetCall(srv, method, fmt.Sprintf(`{"chat_id":42,"message_id":%d%s}`, m.MessageID, fields)), http.StatusOK)
+	}
+	latest := func() Message { return srv.Store().Bot(widgetBot).Messages(42, 1)[0] }
+
+	edit("editMessageReplyMarkup", `,"reply_markup":{"inline_keyboard":[[{"text":"go","callback_data":"go"}]]}`)
+	if got := latest(); got.Widget == nil || got.Caption != "v1" || got.ReplyMarkup == nil {
+		t.Fatalf("markup edit dropped the widget or caption: %+v", got)
+	}
+	edit("editMessageCaption", `,"caption":"v2","reply_markup":{"inline_keyboard":[[{"text":"go","callback_data":"go"}]]}`)
+	if got := latest(); got.Widget == nil || got.Caption != "v2" {
+		t.Fatalf("caption edit dropped the widget: %+v", got)
+	}
+	edit("editMessageWidgetData", `,"chat_data":"c2"`)
+	got := latest()
+	if got.Widget.ChatData != "c2" || got.Caption != "v2" || got.ReplyMarkup == nil || len(got.ReplyMarkup.InlineKeyboard) != 1 {
+		t.Fatalf("widget data edit undid earlier edits: %+v", got)
+	}
+
+	rec := pollingRequest(srv, http.MethodGet, fmt.Sprintf("/debug/chat/%s/42/messages?name=ann", widgetBot), "")
+	if !strings.Contains(rec.Body.String(), `<iframe class="widget"`) {
+		t.Fatal("debug chat lost the widget after edits")
+	}
+}
+
+func TestInjectWidgetQueryPrivateChat(t *testing.T) {
+	srv := New(Config{Quiet: true})
+	startPolling(t, srv, widgetBot)
+	m := sendTestWidget(t, srv, `,"allow_queries":true`)
+	rec := pollingRequest(srv, http.MethodPost, "/debug/inject/update", fmt.Sprintf(
+		`{"token":%q,"chat_id":42,"first_name":"Ann","username":"ann","type":"widget_query","message_id":%d,"widget_data":"x"}`, widgetBot, m.MessageID))
+	wantStatus(t, rec, http.StatusOK)
+	updates := decodeUpdates(t, pollingRequest(srv, http.MethodGet, "/bot"+widgetBot+"/getUpdates", ""))
+	if chat := updates[0].WidgetQuery.Chat; chat.FirstName != "Ann" || chat.Username != "ann" {
+		t.Fatalf("private chat lacks the user's names: %+v", chat)
+	}
+}
+
+func TestCheckWidgetHTMLSizes(t *testing.T) {
+	if err := checkWidgetHTML(strings.Repeat("x", maxWidgetHTMLCompressed-11)); err != nil {
+		t.Fatalf("short HTML refused: %v", err)
+	}
+	random := make([]byte, 6000)
+	_, _ = rand.Read(random)
+	if err := checkWidgetHTML(base64.StdEncoding.EncodeToString(random)); err == nil {
+		t.Fatal("incompressible HTML over 4096 bytes accepted")
+	}
+}
