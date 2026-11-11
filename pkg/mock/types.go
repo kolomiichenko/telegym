@@ -188,6 +188,7 @@ type Sticker struct {
 	IsAnimated   bool   `json:"is_animated"`
 	IsVideo      bool   `json:"is_video"`
 	Emoji        string `json:"emoji,omitempty"`
+	FileSize     int64  `json:"file_size,omitempty"`
 }
 
 type Dice struct {

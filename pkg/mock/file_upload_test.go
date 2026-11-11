@@ -100,6 +100,70 @@ func uploadedMediaID(t *testing.T, message Message) string {
 	}
 }
 
+func TestSendMediaUploadFileSize(t *testing.T) {
+	for kind, method := range map[string]string{
+		"photo":     "sendPhoto",
+		"video":     "sendVideo",
+		"animation": "sendAnimation",
+		"sticker":   "sendSticker",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			srv := New(Config{Quiet: true})
+			const payload = "media\x00📷"
+			var body bytes.Buffer
+			w := multipart.NewWriter(&body)
+			if err := w.WriteField("chat_id", "42"); err != nil {
+				t.Fatal(err)
+			}
+			part, err := w.CreateFormFile(kind, "media.bin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(part, payload); err != nil {
+				t.Fatal(err)
+			}
+			if err := w.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/bot741:upload/"+method, &body)
+			req.Header.Set("Content-Type", w.FormDataContentType())
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("upload status=%d body=%s", rec.Code, rec.Body.String())
+			}
+
+			var response struct {
+				Result map[string]json.RawMessage `json:"result"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			mediaJSON := response.Result[kind]
+			if kind == "photo" {
+				var photos []json.RawMessage
+				if err := json.Unmarshal(mediaJSON, &photos); err != nil {
+					t.Fatal(err)
+				}
+				if len(photos) != 1 {
+					t.Fatalf("expected one photo size, got %s", mediaJSON)
+				}
+				mediaJSON = photos[0]
+			}
+			var media struct {
+				FileSize int64 `json:"file_size"`
+			}
+			if err := json.Unmarshal(mediaJSON, &media); err != nil {
+				t.Fatal(err)
+			}
+			if media.FileSize != int64(len(payload)) {
+				t.Fatalf("file_size=%d, want %d: %s", media.FileSize, len(payload), mediaJSON)
+			}
+		})
+	}
+}
+
 func TestSendMediaUploadSizeLimit(t *testing.T) {
 	const maxFile = 50 * 1024 * 1024
 	for _, tc := range []struct {
