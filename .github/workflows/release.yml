@@ -115,11 +115,28 @@ jobs:
 
       # pkg/xk6 is its own Go module, versioned by pkg/xk6/vX.Y.Z tags, so
       # `xk6 build --with github.com/kolomiichenko/telegym/pkg/xk6@vX.Y.Z` works.
+      # A tag already pushed by hand on the release commit is kept; one on
+      # another commit fails the release.
       - name: Tag the xk6 module
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-        run: gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/pkg/xk6/$TAG" -f "sha=$GITHUB_SHA"
+        run: |
+          ref="repos/$GITHUB_REPOSITORY/git/ref/tags/pkg/xk6/$TAG"
+          if ! existing=$(gh api "$ref" --jq '[.object.type, .object.sha] | join(" ")' 2>/dev/null); then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/pkg/xk6/$TAG" -f "sha=$GITHUB_SHA"
+            exit 0
+          fi
+          read -r type sha <<< "$existing"
+          # An annotated tag points at a tag object; follow it to the commit.
+          if [[ "$type" == tag ]]; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.object.sha')
+          fi
+          if [[ "$sha" != "$GITHUB_SHA" ]]; then
+            echo "::error::pkg/xk6/$TAG points at $sha, not the release commit $GITHUB_SHA"
+            exit 1
+          fi
+          echo "pkg/xk6/$TAG already points at $GITHUB_SHA"
 
       - name: Create release
         env:
