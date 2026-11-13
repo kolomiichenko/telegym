@@ -491,6 +491,11 @@ How it works:
 - The proxy fetches any referenced media bytes from `/debug/files/:file_id`
   (captured from the bot's multipart uploads) and calls the real Bot API
   to deliver to you
+- HTML widgets are relayed with `sendWidget`; widget data edits update the
+  relayed message. Queries from a widget sent with `allow_queries` are
+  injected into the mock, and the bot's `answerWidgetQuery` is copied back
+  to real Telegram (this reads `/debug/requests`, so keep the request
+  journal enabled). Only `data` queries are relayed
 - Captured uploads are kept up to `TELEGYM_MOCK_FILE_STORE_MAX_BYTES`
   (default 100 MiB, oldest evicted first); an upload larger than that is
   rejected with 413

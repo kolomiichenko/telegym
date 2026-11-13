@@ -117,8 +117,9 @@ func (p *proxyRegistry) Dispatch(token string, m Message) {
 		return
 	}
 	body, err := json.Marshal(proxyForwardPayload{
-		Token:   token,
-		Message: m,
+		Token:        token,
+		Message:      m,
+		AllowQueries: m.Widget != nil && m.Widget.AllowQueries,
 	})
 	if err != nil {
 		log.Printf("proxy: marshal: %v", err)
@@ -152,6 +153,9 @@ func (p *proxyRegistry) Dispatch(token string, m Message) {
 type proxyForwardPayload struct {
 	Token   string  `json:"token"`
 	Message Message `json:"message"`
+	// AllowQueries carries the widget's allow_queries flag, which Message
+	// does not serialize, so the relayed widget can query the bot too.
+	AllowQueries bool `json:"allow_queries,omitempty"`
 }
 
 // =====================================================================
