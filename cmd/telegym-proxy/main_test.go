@@ -220,3 +220,15 @@ func TestEditsApplyToRelayedMessage(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 }
+
+func TestDefaultPublicURL(t *testing.T) {
+	for listen, want := range map[string]string{
+		":8090":          "http://localhost:8090",
+		"127.0.0.1:8091": "http://127.0.0.1:8091",
+		"0.0.0.0:8090":   "http://0.0.0.0:8090",
+	} {
+		if got := defaultPublicURL(listen); got != want {
+			t.Errorf("defaultPublicURL(%q) = %q, want %q", listen, got, want)
+		}
+	}
+}

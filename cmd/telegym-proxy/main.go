@@ -71,7 +71,7 @@ func loadConfig() config {
 	flag.StringVar(&c.mockURL, "mock-url", c.mockURL, "telegym-mock URL")
 	flag.StringVar(&c.mockBotToken, "mock-bot-token", c.mockBotToken, "token the bot-under-test uses on the mock")
 	flag.StringVar(&c.listen, "listen", c.listen, "address to serve /forward callbacks on")
-	flag.StringVar(&c.publicURL, "public-url", c.publicURL, "URL the mock should POST forwards to (default: http://localhost<listen>)")
+	flag.StringVar(&c.publicURL, "public-url", c.publicURL, "URL the mock should POST forwards to (default: derived from -listen)")
 	flag.Int64Var(&c.allowedUserID, "allowed-user-id", c.allowedUserID, "0 = allow anyone, otherwise restrict to one Telegram user")
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -84,9 +84,18 @@ func loadConfig() config {
 		log.Fatal("PROXY_TOKEN is required (from @BotFather)")
 	}
 	if c.publicURL == "" {
-		c.publicURL = "http://localhost" + c.listen
+		c.publicURL = defaultPublicURL(c.listen)
 	}
 	return c
+}
+
+// defaultPublicURL derives the forward URL from the listen address, which
+// may omit the host (":8090") or name one ("127.0.0.1:8090").
+func defaultPublicURL(listen string) string {
+	if strings.HasPrefix(listen, ":") {
+		listen = "localhost" + listen
+	}
+	return "http://" + listen
 }
 
 func envOr(k, v string) string {
