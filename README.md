@@ -491,8 +491,7 @@ How it works:
 - The proxy fetches any referenced media bytes from `/debug/files/:file_id`
   (captured from the bot's multipart uploads) and calls the real Bot API
   to deliver to you
-- HTML widgets are relayed with `sendWidget`; widget data edits update the
-  relayed message. Queries from a widget sent with `allow_queries` are
+- HTML widgets are relayed with `sendWidget`. Queries from a widget sent with `allow_queries` are
   injected into the mock, and the bot's `answerWidgetQuery` is copied back
   to real Telegram (this reads `/debug/requests`, so keep the request
   journal enabled). Only `data` queries are relayed
@@ -504,7 +503,9 @@ Limitations of v1: stickers sent by `file_id` are rendered as `[sticker]`
 text in the real chat (the proxy bot doesn't own those file_ids). Photos,
 videos, and animations the bot uploads from disk are forwarded with real
 bytes. Edits via mock message_ids are tracked through a per-process
-mapping so the bot's `editMessageText` propagates correctly.
+mapping, so `editMessageText`, `editMessageCaption`, `editMessageReplyMarkup`
+and `editMessageWidgetData` update the relayed message in place;
+`editMessageMedia` is not relayed (the mock keeps no bytes for the new media).
 
 ## Metrics & dashboards
 

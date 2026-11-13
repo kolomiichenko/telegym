@@ -120,6 +120,7 @@ func (p *proxyRegistry) Dispatch(token string, m Message) {
 		Token:        token,
 		Message:      m,
 		AllowQueries: m.Widget != nil && m.Widget.AllowQueries,
+		Edit:         m.edit,
 	})
 	if err != nil {
 		log.Printf("proxy: marshal: %v", err)
@@ -156,6 +157,9 @@ type proxyForwardPayload struct {
 	// AllowQueries carries the widget's allow_queries flag, which Message
 	// does not serialize, so the relayed widget can query the bot too.
 	AllowQueries bool `json:"allow_queries,omitempty"`
+	// Edit names the editMessage* method for a revision of an earlier
+	// message; empty for new messages.
+	Edit string `json:"edit,omitempty"`
 }
 
 // =====================================================================

@@ -440,7 +440,10 @@ func (h *Handlers) EditMessageWidgetData(c *gin.Context, bot *botEntry) {
 	if setPublic {
 		w.PublicData = publicData
 	}
-	bot.editWidgetMessage(chatID, messageID, func(m *Message) { m.Widget = &w })
+	bot.editWidgetMessage(chatID, messageID, func(m *Message) {
+		m.Widget = &w
+		m.edit = "editMessageWidgetData"
+	})
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: true})
 }
 

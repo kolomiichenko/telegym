@@ -173,3 +173,50 @@ func TestWidgetRoundTrip(t *testing.T) {
 		t.Fatalf("editMessageWidgetData params: %v", c.params)
 	}
 }
+
+func TestEditsApplyToRelayedMessage(t *testing.T) {
+	p, mockURL, calls := testStand(t)
+
+	var sent struct {
+		MessageID int `json:"message_id"`
+	}
+	_ = json.Unmarshal(botCall(t, mockURL, "sendMessage",
+		fmt.Sprintf(`{"chat_id":%d,"text":"v1"}`, testChatID)), &sent)
+	waitCall(t, calls, "sendMessage")
+	waitRelayed(t, p)
+
+	keyboard := `{"inline_keyboard":[[{"text":"ok","callback_data":"ok"}]]}`
+	tests := []struct {
+		method string
+		body   string
+		want   map[string]any
+	}{
+		{"editMessageText", `"text":"v2","reply_markup":` + keyboard, map[string]any{"text": "v2"}},
+		{"editMessageReplyMarkup", `"reply_markup":` + keyboard, map[string]any{}},
+		{"editMessageCaption", `"caption":"c2"`, map[string]any{"caption": "c2"}},
+	}
+	for _, tt := range tests {
+		botCall(t, mockURL, tt.method, fmt.Sprintf(`{"chat_id":%d,"message_id":%d,%s}`, testChatID, sent.MessageID, tt.body))
+		c := waitCall(t, calls, tt.method)
+		if c.params["message_id"] != float64(testRealMsgID) {
+			t.Fatalf("%s edited message %v, want %d", tt.method, c.params["message_id"], testRealMsgID)
+		}
+		for k, v := range tt.want {
+			if c.params[k] != v {
+				t.Fatalf("%s %s=%v, want %v", tt.method, k, c.params[k], v)
+			}
+		}
+		if strings.Contains(tt.body, "reply_markup") && c.params["reply_markup"] == nil {
+			t.Fatalf("%s dropped reply_markup", tt.method)
+		}
+	}
+
+	// An edit of a message the proxy never relayed is not sent as a new one.
+	botCall(t, mockURL, "editMessageText", fmt.Sprintf(`{"chat_id":%d,"message_id":%d,"text":"x"}`, testChatID, sent.MessageID+100))
+	// Forwards are asynchronous, so watch a window instead of the next call.
+	select {
+	case c := <-calls:
+		t.Fatalf("unexpected call %s %v", c.method, c.params)
+	case <-time.After(300 * time.Millisecond):
+	}
+}

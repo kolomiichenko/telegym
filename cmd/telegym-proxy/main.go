@@ -31,6 +31,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -424,6 +425,7 @@ func (p *proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 		Token        string         `json:"token"`
 		Message      telego.Message `json:"message"`
 		AllowQueries bool           `json:"allow_queries"`
+		Edit         string         `json:"edit"`
 	}
 	if err := json.Unmarshal(body, &std); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -437,7 +439,11 @@ func (p *proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &ext) // best-effort
 
 	markup := buildMarkup(ext.Message.ReplyMarkup)
-	if err := p.forwardToReal(r.Context(), std.Message, std.AllowQueries, markup); err != nil {
+	forward := func() error { return p.forwardToReal(r.Context(), std.Message, std.AllowQueries, markup) }
+	if std.Edit != "" {
+		forward = func() error { return p.editReal(r.Context(), std.Edit, std.Message, markup) }
+	}
+	if err := forward(); err != nil {
 		log.Printf("proxy: forward: %v", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -565,6 +571,52 @@ func (p *proxy) forwardToReal(ctx context.Context, m telego.Message, allowQuerie
 	}
 }
 
+// editReal applies an edit revision from the mock to the real message it
+// was relayed as. The revision carries only what the edit method changed,
+// so the method name picks the matching Bot API call.
+func (p *proxy) editReal(ctx context.Context, method string, m telego.Message, markup telego.ReplyMarkup) error {
+	realID := p.lookupRealID(m.MessageID)
+	if realID == 0 {
+		log.Printf("proxy: %s for message %d that was not relayed", method, m.MessageID)
+		return nil
+	}
+	chatID := tu.ID(m.Chat.ID)
+	// Edits accept only inline keyboards; anything else leaves markup as is.
+	inline, _ := markup.(*telego.InlineKeyboardMarkup)
+
+	var err error
+	switch method {
+	case "editMessageText":
+		_, err = p.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			ChatID: chatID, MessageID: realID, Text: m.Text, ReplyMarkup: inline,
+		})
+	case "editMessageCaption":
+		_, err = p.bot.EditMessageCaption(ctx, &telego.EditMessageCaptionParams{
+			ChatID: chatID, MessageID: realID, Caption: m.Caption, ReplyMarkup: inline,
+		})
+	case "editMessageReplyMarkup":
+		_, err = p.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+			ChatID: chatID, MessageID: realID, ReplyMarkup: inline,
+		})
+	case "editMessageWidgetData":
+		if m.Widget == nil {
+			return nil
+		}
+		err = p.bot.EditMessageWidgetData(ctx, &telego.EditMessageWidgetDataParams{
+			ChatID: chatID, MessageID: realID, PublicData: m.Widget.PublicData, ChatData: m.Widget.ChatData,
+		})
+	default:
+		// editMessageMedia: the mock keeps no bytes for the new media.
+		log.Printf("proxy: %s is not relayed", method)
+		return nil
+	}
+	// The mock does not reject no-op edits, real Telegram does.
+	if err != nil && strings.Contains(err.Error(), "message is not modified") {
+		return nil
+	}
+	return err
+}
+
 // relayMedia downloads the file bytes from the mock's file store and uploads
 // them to real Telegram as a fresh InputFile. The proxy bot's file_id pool
 // is private to it, so we can't simply pass the bot-under-test's file_ids
@@ -610,17 +662,10 @@ func (p *proxy) relayMedia(ctx context.Context, m telego.Message, kind, fileID, 
 	return p.recordSent(m.MessageID, sent, sendErr)
 }
 
-// relayWidget sends a widget message to real Telegram, or applies a widget
-// data edit: the mock dispatches editMessageWidgetData as a new revision of
-// an already relayed message.
+// relayWidget sends a widget message to real Telegram.
 func (p *proxy) relayWidget(ctx context.Context, m telego.Message, allowQueries bool, markup telego.ReplyMarkup) error {
 	chatID := tu.ID(m.Chat.ID)
 	w := m.Widget
-	if realID := p.lookupRealID(m.MessageID); realID != 0 {
-		return p.bot.EditMessageWidgetData(ctx, &telego.EditMessageWidgetDataParams{
-			ChatID: chatID, MessageID: realID, PublicData: w.PublicData, ChatData: w.ChatData,
-		})
-	}
 
 	// A shared widget's id belongs to the bot-under-test, so the first send
 	// creates the proxy bot's own shared copy and later sends reuse it.
