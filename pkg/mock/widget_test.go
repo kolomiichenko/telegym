@@ -332,6 +332,30 @@ func TestInjectWidgetQueryWebhook(t *testing.T) {
 	}
 }
 
+func TestProxyForwardsWidgetAllowQueries(t *testing.T) {
+	received := make(chan proxyForwardPayload, 2)
+	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p proxyForwardPayload
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		received <- p
+	}))
+	defer receiver.Close()
+
+	srv := New(Config{Quiet: true})
+	srv.store.Proxy.Register(widgetBot, receiver.URL, []int64{42})
+	for _, allow := range []bool{true, false} {
+		sendTestWidget(t, srv, fmt.Sprintf(`,"allow_queries":%t`, allow))
+		select {
+		case p := <-received:
+			if p.Message.Widget == nil || p.AllowQueries != allow {
+				t.Fatalf("allow_queries=%t: forwarded %+v", allow, p)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("proxy did not receive the widget")
+		}
+	}
+}
+
 func TestAnswerWidgetQuery(t *testing.T) {
 	srv := New(Config{Quiet: true})
 	startPolling(t, srv, widgetBot)

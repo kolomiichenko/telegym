@@ -25,10 +25,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -68,7 +71,7 @@ func loadConfig() config {
 	flag.StringVar(&c.mockURL, "mock-url", c.mockURL, "telegym-mock URL")
 	flag.StringVar(&c.mockBotToken, "mock-bot-token", c.mockBotToken, "token the bot-under-test uses on the mock")
 	flag.StringVar(&c.listen, "listen", c.listen, "address to serve /forward callbacks on")
-	flag.StringVar(&c.publicURL, "public-url", c.publicURL, "URL the mock should POST forwards to (default: http://localhost<listen>)")
+	flag.StringVar(&c.publicURL, "public-url", c.publicURL, "URL the mock should POST forwards to (default: derived from -listen)")
 	flag.Int64Var(&c.allowedUserID, "allowed-user-id", c.allowedUserID, "0 = allow anyone, otherwise restrict to one Telegram user")
 	printVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
@@ -81,9 +84,18 @@ func loadConfig() config {
 		log.Fatal("PROXY_TOKEN is required (from @BotFather)")
 	}
 	if c.publicURL == "" {
-		c.publicURL = "http://localhost" + c.listen
+		c.publicURL = defaultPublicURL(c.listen)
 	}
 	return c
+}
+
+// defaultPublicURL derives the forward URL from the listen address, which
+// may omit the host (":8090") or name one ("127.0.0.1:8090").
+func defaultPublicURL(listen string) string {
+	if strings.HasPrefix(listen, ":") {
+		listen = "localhost" + listen
+	}
+	return "http://" + listen
 }
 
 func envOr(k, v string) string {
@@ -129,6 +141,9 @@ func main() {
 		bot:        bot,
 		httpc:      &http.Client{Timeout: 60 * time.Second},
 		messageMap: map[int]int{},
+		realIDs:    map[int]int{},
+		widgetIDs:  map[string]string{},
+		realWidget: map[string]string{},
 	}
 
 	// HTTP server for /forward callbacks from the mock.
@@ -161,7 +176,10 @@ type proxy struct {
 	httpc *http.Client
 
 	mu         sync.Mutex
-	messageMap map[int]int // mock_message_id → real Telegram message_id
+	messageMap map[int]int       // real Telegram message_id → mock_message_id
+	realIDs    map[int]int       // mock_message_id → real Telegram message_id
+	widgetIDs  map[string]string // real shared widget_id → mock widget_id
+	realWidget map[string]string // mock shared widget_id → real widget_id
 }
 
 func (p *proxy) pollLoop(ctx context.Context) {
@@ -175,7 +193,7 @@ func (p *proxy) pollLoop(ctx context.Context) {
 		updates, err := p.bot.GetUpdates(ctx, &telego.GetUpdatesParams{
 			Offset:         offset,
 			Timeout:        p.cfg.pollTimeout,
-			AllowedUpdates: []string{"message", "callback_query"},
+			AllowedUpdates: []string{"message", "callback_query", "widget_query", "shared_widget_query"},
 		})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -236,7 +254,119 @@ func (p *proxy) handleUpdate(ctx context.Context, u telego.Update) {
 		_ = p.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
 			CallbackQueryID: cq.ID,
 		})
+
+	case u.WidgetQuery != nil:
+		wq := u.WidgetQuery
+		if !p.allowed(wq.From.ID) {
+			return
+		}
+		mockMsgID := p.lookupMockID(wq.MessageID)
+		if mockMsgID == 0 {
+			log.Printf("proxy: widget_query for unknown message %d", wq.MessageID)
+			return
+		}
+		chatID := wq.From.ID
+		if wq.Chat != nil {
+			chatID = wq.Chat.ID
+		}
+		p.relayWidgetQuery(ctx, wq.ID, wq.Type, wq.From, chatID, map[string]any{
+			"type":        "widget_query",
+			"message_id":  mockMsgID,
+			"widget_data": wq.Data,
+		})
+
+	case u.SharedWidgetQuery != nil:
+		sq := u.SharedWidgetQuery
+		if !p.allowed(sq.From.ID) {
+			return
+		}
+		mockWidgetID := p.lookupMockWidgetID(sq.WidgetID)
+		if mockWidgetID == "" {
+			log.Printf("proxy: shared_widget_query for unknown widget %s", sq.WidgetID)
+			return
+		}
+		p.relayWidgetQuery(ctx, sq.ID, sq.Type, sq.From, sq.From.ID, map[string]any{
+			"type":        "shared_widget_query",
+			"widget_id":   mockWidgetID,
+			"widget_data": sq.Data,
+		})
 	}
+}
+
+// relayWidgetQuery injects a real widget query into the mock and, in the
+// background, copies the bot's answerWidgetQuery back to real Telegram.
+// Unanswered queries stay unanswered, as they would without the proxy.
+func (p *proxy) relayWidgetQuery(ctx context.Context, realQueryID string, qt telego.WidgetQueryType, from telego.User, chatID int64, fields map[string]any) {
+	// The mock injects only "data" queries; the others need a TON wallet.
+	if qt == nil || qt.WidgetQueryType() != telego.WidgetQueryData {
+		log.Printf("proxy: skipping unsupported widget query type")
+		return
+	}
+	deadline := time.Now().Add(widgetQueryTTL)
+	p.bindIfNeeded(chatID)
+	payload := map[string]any{
+		"token":      p.cfg.mockBotToken,
+		"user_id":    from.ID,
+		"chat_id":    chatID,
+		"username":   from.Username,
+		"first_name": from.FirstName,
+	}
+	maps.Copy(payload, fields)
+	res, ok := p.inject(payload)
+	if !ok || res.WidgetQueryID == "" {
+		return
+	}
+	go func() {
+		data, found := p.awaitWidgetAnswer(ctx, res.WidgetQueryID, deadline)
+		if !found {
+			return
+		}
+		if err := p.bot.AnswerWidgetQuery(ctx, &telego.AnswerWidgetQueryParams{
+			WidgetQueryID: realQueryID, Data: data,
+		}); err != nil {
+			log.Printf("proxy: answerWidgetQuery: %v", err)
+		}
+	}()
+}
+
+// widgetQueryTTL is how long Telegram accepts an answer to a widget query.
+const widgetQueryTTL = 15 * time.Second
+
+// awaitWidgetAnswer polls the mock's request journal for the bot's
+// successful answerWidgetQuery to the injected query.
+func (p *proxy) awaitWidgetAnswer(ctx context.Context, mockQueryID string, deadline time.Time) (string, bool) {
+	endpoint := p.cfg.mockURL + "/debug/requests/" + url.PathEscape(p.cfg.mockBotToken) +
+		"?method=answerWidgetQuery&limit=100"
+	for time.Now().Before(deadline) {
+		var out struct {
+			Requests []struct {
+				Parameters map[string]any `json:"parameters"`
+				Status     int            `json:"status"`
+			} `json:"requests"`
+		}
+		resp, err := p.httpc.Get(endpoint)
+		if err == nil {
+			err = json.NewDecoder(resp.Body).Decode(&out)
+			_ = resp.Body.Close()
+		}
+		if err != nil {
+			log.Printf("proxy: await widget answer: %v", err)
+		}
+		for _, r := range out.Requests {
+			if r.Status != http.StatusOK || fmt.Sprint(r.Parameters["widget_query_id"]) != mockQueryID {
+				continue
+			}
+			data, _ := r.Parameters["data"].(string)
+			return data, true
+		}
+		select {
+		case <-ctx.Done():
+			return "", false
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	log.Printf("proxy: bot did not answer widget query %s in time", mockQueryID)
+	return "", false
 }
 
 func (p *proxy) allowed(userID int64) bool {
@@ -263,18 +393,27 @@ func (p *proxy) bindIfNeeded(chatID int64) {
 	_ = resp.Body.Close()
 }
 
-func (p *proxy) inject(payload map[string]any) {
+// injectResult is the part of the mock's inject response the proxy uses.
+type injectResult struct {
+	WidgetQueryID string `json:"widget_query_id"`
+}
+
+func (p *proxy) inject(payload map[string]any) (injectResult, bool) {
+	var res injectResult
 	body, _ := json.Marshal(payload)
 	resp, err := p.httpc.Post(p.cfg.mockURL+"/debug/inject/update", "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("proxy: inject: %v", err)
-		return
+		return res, false
 	}
 	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
 		log.Printf("proxy: inject HTTP %d: %s", resp.StatusCode, b)
+		return res, false
 	}
+	_ = json.Unmarshal(b, &res)
+	return res, true
 }
 
 // handleForward is the mock → proxy webhook: receives an outbound Message the
@@ -292,8 +431,10 @@ func (p *proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var std struct {
-		Token   string         `json:"token"`
-		Message telego.Message `json:"message"`
+		Token        string         `json:"token"`
+		Message      telego.Message `json:"message"`
+		AllowQueries bool           `json:"allow_queries"`
+		Edit         string         `json:"edit"`
 	}
 	if err := json.Unmarshal(body, &std); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -307,7 +448,11 @@ func (p *proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 	_ = json.Unmarshal(body, &ext) // best-effort
 
 	markup := buildMarkup(ext.Message.ReplyMarkup)
-	if err := p.forwardToReal(r.Context(), std.Message, markup); err != nil {
+	forward := func() error { return p.forwardToReal(r.Context(), std.Message, std.AllowQueries, markup) }
+	if std.Edit != "" {
+		forward = func() error { return p.editReal(r.Context(), std.Edit, std.Message, markup) }
+	}
+	if err := forward(); err != nil {
 		log.Printf("proxy: forward: %v", err)
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -391,7 +536,8 @@ func buildMarkup(in *incomingMarkup) telego.ReplyMarkup {
 //
 // markup is built upstream from the raw payload so reply keyboards
 // (which telego.Message.ReplyMarkup can't represent) flow through.
-func (p *proxy) forwardToReal(ctx context.Context, m telego.Message, markup telego.ReplyMarkup) error {
+// allowQueries is the widget's allow_queries flag, which Message omits.
+func (p *proxy) forwardToReal(ctx context.Context, m telego.Message, allowQueries bool, markup telego.ReplyMarkup) error {
 	chatID := tu.ID(m.Chat.ID)
 
 	switch {
@@ -412,6 +558,8 @@ func (p *proxy) forwardToReal(ctx context.Context, m telego.Message, markup tele
 			ChatID: chatID, Text: text, ReplyMarkup: markup,
 		})
 		return p.recordSent(m.MessageID, sent, err)
+	case m.Widget != nil:
+		return p.relayWidget(ctx, m, allowQueries, markup)
 	case m.Dice != nil:
 		sent, err := p.bot.SendDice(ctx, &telego.SendDiceParams{
 			ChatID: chatID, Emoji: m.Dice.Emoji,
@@ -430,6 +578,52 @@ func (p *proxy) forwardToReal(ctx context.Context, m telego.Message, markup tele
 		})
 		return p.recordSent(m.MessageID, sent, err)
 	}
+}
+
+// editReal applies an edit revision from the mock to the real message it
+// was relayed as. The revision carries only what the edit method changed,
+// so the method name picks the matching Bot API call.
+func (p *proxy) editReal(ctx context.Context, method string, m telego.Message, markup telego.ReplyMarkup) error {
+	realID := p.lookupRealID(m.MessageID)
+	if realID == 0 {
+		log.Printf("proxy: %s for message %d that was not relayed", method, m.MessageID)
+		return nil
+	}
+	chatID := tu.ID(m.Chat.ID)
+	// Edits accept only inline keyboards; anything else leaves markup as is.
+	inline, _ := markup.(*telego.InlineKeyboardMarkup)
+
+	var err error
+	switch method {
+	case "editMessageText":
+		_, err = p.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+			ChatID: chatID, MessageID: realID, Text: m.Text, ReplyMarkup: inline,
+		})
+	case "editMessageCaption":
+		_, err = p.bot.EditMessageCaption(ctx, &telego.EditMessageCaptionParams{
+			ChatID: chatID, MessageID: realID, Caption: m.Caption, ReplyMarkup: inline,
+		})
+	case "editMessageReplyMarkup":
+		_, err = p.bot.EditMessageReplyMarkup(ctx, &telego.EditMessageReplyMarkupParams{
+			ChatID: chatID, MessageID: realID, ReplyMarkup: inline,
+		})
+	case "editMessageWidgetData":
+		if m.Widget == nil {
+			return nil
+		}
+		err = p.bot.EditMessageWidgetData(ctx, &telego.EditMessageWidgetDataParams{
+			ChatID: chatID, MessageID: realID, PublicData: m.Widget.PublicData, ChatData: m.Widget.ChatData,
+		})
+	default:
+		// editMessageMedia: the mock keeps no bytes for the new media.
+		log.Printf("proxy: %s is not relayed", method)
+		return nil
+	}
+	// The mock does not reject no-op edits, real Telegram does.
+	if err != nil && strings.Contains(err.Error(), "message is not modified") {
+		return nil
+	}
+	return err
 }
 
 // relayMedia downloads the file bytes from the mock's file store and uploads
@@ -475,6 +669,45 @@ func (p *proxy) relayMedia(ctx context.Context, m telego.Message, kind, fileID, 
 		return fmt.Errorf("relayMedia: unsupported kind %q", kind)
 	}
 	return p.recordSent(m.MessageID, sent, sendErr)
+}
+
+// relayWidget sends a widget message to real Telegram.
+func (p *proxy) relayWidget(ctx context.Context, m telego.Message, allowQueries bool, markup telego.ReplyMarkup) error {
+	chatID := tu.ID(m.Chat.ID)
+	w := m.Widget
+
+	// A shared widget's id belongs to the bot-under-test, so the first send
+	// creates the proxy bot's own shared copy and later sends reuse it.
+	if realWidgetID := p.lookupRealWidgetID(w.ID); realWidgetID != "" {
+		sent, err := p.bot.SendSharedWidget(ctx, &telego.SendSharedWidgetParams{
+			ChatID:                chatID,
+			WidgetID:              realWidgetID,
+			ChatData:              w.ChatData,
+			Caption:               m.Caption,
+			CaptionEntities:       m.CaptionEntities,
+			ShowCaptionAboveMedia: m.ShowCaptionAboveMedia,
+			ReplyMarkup:           markup,
+		})
+		return p.recordSent(m.MessageID, sent, err)
+	}
+	sent, err := p.bot.SendWidget(ctx, &telego.SendWidgetParams{
+		ChatID:                chatID,
+		HTML:                  w.HTML,
+		Width:                 w.Width,
+		Height:                w.Height,
+		PublicData:            w.PublicData,
+		ChatData:              w.ChatData,
+		Caption:               m.Caption,
+		CaptionEntities:       m.CaptionEntities,
+		ShowCaptionAboveMedia: m.ShowCaptionAboveMedia,
+		AllowQueries:          allowQueries,
+		IsShared:              w.ID != "",
+		ReplyMarkup:           markup,
+	})
+	if err == nil && sent != nil && sent.Widget != nil && w.ID != "" {
+		p.rememberWidget(w.ID, sent.Widget.ID)
+	}
+	return p.recordSent(m.MessageID, sent, err)
 }
 
 func (p *proxy) fetchFile(fileID string) ([]byte, string, string, error) {
@@ -524,6 +757,7 @@ func (p *proxy) remember(mockID, realID int) {
 	}
 	p.mu.Lock()
 	p.messageMap[realID] = mockID
+	p.realIDs[mockID] = realID
 	p.mu.Unlock()
 }
 
@@ -531,6 +765,37 @@ func (p *proxy) lookupMockID(realID int) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.messageMap[realID]
+}
+
+func (p *proxy) lookupRealID(mockID int) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.realIDs[mockID]
+}
+
+func (p *proxy) rememberWidget(mockID, realID string) {
+	if realID == "" {
+		return
+	}
+	p.mu.Lock()
+	p.widgetIDs[realID] = mockID
+	p.realWidget[mockID] = realID
+	p.mu.Unlock()
+}
+
+func (p *proxy) lookupRealWidgetID(mockID string) string {
+	if mockID == "" {
+		return ""
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.realWidget[mockID]
+}
+
+func (p *proxy) lookupMockWidgetID(realID string) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.widgetIDs[realID]
 }
 
 func shortToken(t string) string {

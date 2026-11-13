@@ -87,6 +87,10 @@ type Message struct {
 	// isNew marks a message from a send* method (not an edit): storing it
 	// ends the sendChatAction status in its topic.
 	isNew bool
+
+	// edit names the editMessage* method that produced this revision, so
+	// telegym-proxy can apply it to the relayed message.
+	edit string
 }
 
 // ForumTopic is the createForumTopic result.

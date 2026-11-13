@@ -277,6 +277,7 @@ func (h *Handlers) EditMessageText(c *gin.Context, bot *botEntry) {
 		Entities:    parseEntities(body["entities"]),
 		ReplyMarkup: parseReplyMarkup(body["reply_markup"]),
 		ParseMode:   toString(body["parse_mode"]),
+		edit:        "editMessageText",
 	}
 	bot.AppendMessage(m)
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
@@ -291,6 +292,7 @@ func (h *Handlers) EditMessageReplyMarkup(c *gin.Context, bot *botEntry) {
 	markup := parseReplyMarkup(body["reply_markup"])
 	if m, ok := bot.editWidgetMessage(toInt64(body["chat_id"]), toInt(body["message_id"]), func(m *Message) {
 		m.ReplyMarkup = markup
+		m.edit = "editMessageReplyMarkup"
 	}); ok {
 		c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
 		return
@@ -301,6 +303,7 @@ func (h *Handlers) EditMessageReplyMarkup(c *gin.Context, bot *botEntry) {
 		Date:        time.Now().Unix(),
 		Chat:        Chat{ID: toInt64(body["chat_id"]), Type: "private"},
 		ReplyMarkup: markup,
+		edit:        "editMessageReplyMarkup",
 	}
 	bot.AppendMessage(m)
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
@@ -322,6 +325,7 @@ func (h *Handlers) EditMessageCaption(c *gin.Context, bot *botEntry) {
 		m.CaptionEntities = parseEntities(body["caption_entities"])
 		m.ReplyMarkup = parseReplyMarkup(body["reply_markup"])
 		m.ParseMode = toString(body["parse_mode"])
+		m.edit = "editMessageCaption"
 	}); ok {
 		c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
 		return
@@ -338,6 +342,7 @@ func (h *Handlers) EditMessageCaption(c *gin.Context, bot *botEntry) {
 		CaptionEntities: parseEntities(body["caption_entities"]),
 		ReplyMarkup:     parseReplyMarkup(body["reply_markup"]),
 		ParseMode:       toString(body["parse_mode"]),
+		edit:            "editMessageCaption",
 	}
 	bot.AppendMessage(m)
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
@@ -357,6 +362,7 @@ func (h *Handlers) EditMessageMedia(c *gin.Context, bot *botEntry) {
 		Caption:     toString(body["caption"]),
 		ReplyMarkup: parseReplyMarkup(body["reply_markup"]),
 		Photo:       []PhotoSize{{FileID: fakeFileID("photo"), FileUniqueID: fakeFileID("photo_u"), Width: 1, Height: 1}},
+		edit:        "editMessageMedia",
 	}
 	bot.AppendMessage(m)
 	c.JSON(http.StatusOK, APIResponse{OK: true, Result: m})
