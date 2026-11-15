@@ -21,11 +21,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"maps"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -55,8 +57,10 @@ type config struct {
 	pollTimeout   int    // long-poll timeout for getUpdates
 }
 
-func loadConfig() config {
-	c := config{
+// parseConfig builds the proxy config from flags and env. done reports that
+// -version already printed and the process should exit.
+func parseConfig(args []string, stdout io.Writer) (c config, done bool, err error) {
+	c = config{
 		proxyToken:   envOr("PROXY_TOKEN", ""),
 		mockURL:      envOr("MOCK_URL", "http://localhost:5678"),
 		mockBotToken: envOr("MOCK_BOT_TOKEN", "1234567890:telegym_default_mock_token_xxxxxxxx"),
@@ -67,26 +71,27 @@ func loadConfig() config {
 	if v := os.Getenv("ALLOWED_USER_ID"); v != "" {
 		c.allowedUserID, _ = strconv.ParseInt(v, 10, 64)
 	}
-	flag.StringVar(&c.proxyToken, "proxy-token", c.proxyToken, "real Bot API token (from @BotFather)")
-	flag.StringVar(&c.mockURL, "mock-url", c.mockURL, "telegym-mock URL")
-	flag.StringVar(&c.mockBotToken, "mock-bot-token", c.mockBotToken, "token the bot-under-test uses on the mock")
-	flag.StringVar(&c.listen, "listen", c.listen, "address to serve /forward callbacks on")
-	flag.StringVar(&c.publicURL, "public-url", c.publicURL, "URL the mock should POST forwards to (default: derived from -listen)")
-	flag.Int64Var(&c.allowedUserID, "allowed-user-id", c.allowedUserID, "0 = allow anyone, otherwise restrict to one Telegram user")
-	printVersion := flag.Bool("version", false, "print the version and exit")
-	flag.Parse()
+	fs := flag.NewFlagSet("telegym-proxy", flag.ExitOnError)
+	fs.StringVar(&c.proxyToken, "proxy-token", c.proxyToken, "real Bot API token (from @BotFather)")
+	fs.StringVar(&c.mockURL, "mock-url", c.mockURL, "telegym-mock URL")
+	fs.StringVar(&c.mockBotToken, "mock-bot-token", c.mockBotToken, "token the bot-under-test uses on the mock")
+	fs.StringVar(&c.listen, "listen", c.listen, "address to serve /forward callbacks on")
+	fs.StringVar(&c.publicURL, "public-url", c.publicURL, "URL the mock should POST forwards to (default: derived from -listen)")
+	fs.Int64Var(&c.allowedUserID, "allowed-user-id", c.allowedUserID, "0 = allow anyone, otherwise restrict to one Telegram user")
+	printVersion := fs.Bool("version", false, "print the version and exit")
+	_ = fs.Parse(args) // ExitOnError: never returns an error
 	if *printVersion {
-		fmt.Println(version)
-		os.Exit(0)
+		_, _ = fmt.Fprintln(stdout, version)
+		return c, true, nil
 	}
 
 	if c.proxyToken == "" {
-		log.Fatal("PROXY_TOKEN is required (from @BotFather)")
+		return c, false, errors.New("PROXY_TOKEN is required (from @BotFather)")
 	}
 	if c.publicURL == "" {
 		c.publicURL = defaultPublicURL(c.listen)
 	}
-	return c
+	return c, false, nil
 }
 
 // defaultPublicURL derives the forward URL from the listen address, which
@@ -108,19 +113,31 @@ func envOr(k, v string) string {
 // ----- main ---------------------------------------------------------------
 
 func main() {
-	cfg := loadConfig()
-
-	bot, err := telego.NewBot(cfg.proxyToken)
+	cfg, done, err := parseConfig(os.Args[1:], os.Stdout)
 	if err != nil {
-		log.Fatalf("proxy: telego.NewBot: %v", err)
+		log.Fatalf("proxy: %v", err)
+	}
+	if done {
+		return
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	if err := run(ctx, cfg); err != nil {
+		log.Fatalf("proxy: %v", err)
+	}
+}
+
+// run relays between real Telegram and the mock until ctx is done.
+func run(ctx context.Context, cfg config, botOpts ...telego.BotOption) error {
+	bot, err := telego.NewBot(cfg.proxyToken, botOpts...)
+	if err != nil {
+		return fmt.Errorf("telego.NewBot: %w", err)
+	}
 
 	me, err := bot.GetMe(ctx)
 	if err != nil {
-		log.Fatalf("proxy: getMe on real Telegram failed: %v", err)
+		return fmt.Errorf("getMe on real Telegram failed: %w", err)
 	}
 	log.Printf("proxy: connected as @%s (id=%d)", me.Username, me.ID)
 	log.Printf("proxy: relaying to mock at %s (bot token %s)", cfg.mockURL, shortToken(cfg.mockBotToken))
@@ -150,12 +167,15 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/forward", p.handleForward)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) })
-	srv := &http.Server{Addr: cfg.listen, Handler: mux}
-
+	ln, err := net.Listen("tcp", cfg.listen)
+	if err != nil {
+		return fmt.Errorf("listen: %w", err)
+	}
+	srv := &http.Server{Handler: mux}
 	go func() {
-		log.Printf("proxy: listening on %s", cfg.listen)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("proxy: listen: %v", err)
+		log.Printf("proxy: listening on %s", ln.Addr())
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			log.Printf("proxy: serve: %v", err)
 		}
 	}()
 
@@ -166,6 +186,7 @@ func main() {
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
 	log.Printf("proxy: bye")
+	return nil
 }
 
 // ----- proxy --------------------------------------------------------------

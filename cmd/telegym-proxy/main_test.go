@@ -21,6 +21,8 @@ const (
 	testProxyToken = "1111111111:proxy_test_token_xxxxxxxxxxxxxxxxxx"
 	testChatID     = 42
 	testRealMsgID  = 500
+
+	testRealWidgetID = "real-shared"
 )
 
 // apiCall is one Bot API call the fake Telegram received.
@@ -35,12 +37,24 @@ func fakeTelegram(t *testing.T) (*httptest.Server, <-chan apiCall) {
 	calls := make(chan apiCall, 16)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
-		var params map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&params)
+		params := map[string]any{}
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
+			// Uploads: report form fields as values and files by filename.
+			if err := r.ParseMultipartForm(1 << 20); err == nil {
+				for k, v := range r.MultipartForm.Value {
+					params[k] = v[0]
+				}
+				for k, f := range r.MultipartForm.File {
+					params[k] = f[0].Filename
+				}
+			}
+		} else {
+			_ = json.NewDecoder(r.Body).Decode(&params)
+		}
 		calls <- apiCall{method: method, params: params}
 
-		result := fmt.Sprintf(`{"message_id":%d,"date":1,"chat":{"id":%d,"type":"private"},"widget":{"html":"x"}}`,
-			testRealMsgID, testChatID)
+		result := fmt.Sprintf(`{"message_id":%d,"date":1,"chat":{"id":%d,"type":"private"},"widget":{"id":"%s","html":"x"}}`,
+			testRealMsgID, testChatID, testRealWidgetID)
 		if method == "answerWidgetQuery" || method == "editMessageWidgetData" {
 			result = `true`
 		}

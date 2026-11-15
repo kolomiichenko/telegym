@@ -90,17 +90,34 @@ func parseLatency(s string) (lo, hi time.Duration, err error) {
 }
 
 func main() {
-	cfg := mock.Config{}
+	cfg, done, err := parseConfig(os.Args[1:], os.Stdout)
+	if err != nil {
+		log.Fatalf("telegym-mock: %v", err)
+	}
+	if done {
+		return
+	}
+
+	srv := mock.New(cfg)
+	if err := srv.Run(); err != nil {
+		log.Fatalf("telegym-mock: %v", err)
+	}
+}
+
+// parseConfig builds the mock config from flags and env. done reports that a
+// print-and-exit flag (-version, -banner) already wrote its output.
+func parseConfig(args []string, stdout io.Writer) (cfg mock.Config, done bool, err error) {
+	fs := flag.NewFlagSet("telegym-mock", flag.ExitOnError)
 
 	var bannerOnly bool
-	flag.StringVar(&cfg.Listen, "listen", envOr("TELEGYM_MOCK_LISTEN", ":5678"), "HTTP listen address")
-	flag.StringVar(&cfg.MetricsListen, "metrics-listen", envOr("TELEGYM_MOCK_METRICS_LISTEN", ":9104"), "Prometheus metrics listen address (empty=disabled)")
-	flag.StringVar(&cfg.DefaultWebhookURL, "default-webhook", envOr("TELEGYM_MOCK_DEFAULT_WEBHOOK", ""), "Fallback webhook URL when a bot has not called setWebhook")
-	flag.Int64Var(&cfg.FileStoreMaxBytes, "file-store-max-bytes", envInt64("TELEGYM_MOCK_FILE_STORE_MAX_BYTES", 0), "Maximum retained upload bytes (0 uses 100 MiB)")
-	flag.BoolVar(&cfg.Quiet, "quiet", envBool("TELEGYM_MOCK_QUIET", false), "Suppress per-request logs")
-	flag.IntVar(&cfg.MaxMessagesPerChat, "max-messages-per-chat", envInt("TELEGYM_MOCK_MAX_MESSAGES_PER_CHAT", mock.DefaultMaxMessagesPerChat), "Outbound messages kept per chat")
-	requestJournal := flag.Bool("request-journal", envBool("TELEGYM_MOCK_REQUEST_JOURNAL", true), "Record Bot API calls for /debug/requests (disable on load runs)")
-	flag.BoolVar(&cfg.RateLimits, "rate-limits", envBool("TELEGYM_MOCK_RATE_LIMITS", false), "Answer 429 with retry_after past Telegram flood limits")
+	fs.StringVar(&cfg.Listen, "listen", envOr("TELEGYM_MOCK_LISTEN", ":5678"), "HTTP listen address")
+	fs.StringVar(&cfg.MetricsListen, "metrics-listen", envOr("TELEGYM_MOCK_METRICS_LISTEN", ":9104"), "Prometheus metrics listen address (empty=disabled)")
+	fs.StringVar(&cfg.DefaultWebhookURL, "default-webhook", envOr("TELEGYM_MOCK_DEFAULT_WEBHOOK", ""), "Fallback webhook URL when a bot has not called setWebhook")
+	fs.Int64Var(&cfg.FileStoreMaxBytes, "file-store-max-bytes", envInt64("TELEGYM_MOCK_FILE_STORE_MAX_BYTES", 0), "Maximum retained upload bytes (0 uses 100 MiB)")
+	fs.BoolVar(&cfg.Quiet, "quiet", envBool("TELEGYM_MOCK_QUIET", false), "Suppress per-request logs")
+	fs.IntVar(&cfg.MaxMessagesPerChat, "max-messages-per-chat", envInt("TELEGYM_MOCK_MAX_MESSAGES_PER_CHAT", mock.DefaultMaxMessagesPerChat), "Outbound messages kept per chat")
+	requestJournal := fs.Bool("request-journal", envBool("TELEGYM_MOCK_REQUEST_JOURNAL", true), "Record Bot API calls for /debug/requests (disable on load runs)")
+	fs.BoolVar(&cfg.RateLimits, "rate-limits", envBool("TELEGYM_MOCK_RATE_LIMITS", false), "Answer 429 with retry_after past Telegram flood limits")
 	limitFlags := []struct {
 		name, env, usage string
 		dst              *mock.RateLimit
@@ -113,33 +130,32 @@ func main() {
 	}
 	for i := range limitFlags {
 		f := &limitFlags[i]
-		f.value = flag.String(f.name, envOr(f.env, ""), f.usage)
+		f.value = fs.String(f.name, envOr(f.env, ""), f.usage)
 	}
-	latency := flag.String("latency", envOr("TELEGYM_MOCK_LATENCY", ""), "Delay Bot API calls: fixed (50ms) or random range (20ms-150ms)")
-	faultRate := flag.String("fault-rate", envOr("TELEGYM_MOCK_FAULT_RATE", "0"), "Fraction of Bot API calls answered with 500 (0-1)")
-	flag.BoolVar(&bannerOnly, "banner", false, "Print the ASCII banner with raw ANSI colors to stdout and exit (for `freeze` and similar renderers)")
-	printVersion := flag.Bool("version", false, "Print the version and exit")
-	flag.Parse()
+	latency := fs.String("latency", envOr("TELEGYM_MOCK_LATENCY", ""), "Delay Bot API calls: fixed (50ms) or random range (20ms-150ms)")
+	faultRate := fs.String("fault-rate", envOr("TELEGYM_MOCK_FAULT_RATE", "0"), "Fraction of Bot API calls answered with 500 (0-1)")
+	fs.BoolVar(&bannerOnly, "banner", false, "Print the ASCII banner with raw ANSI colors to stdout and exit (for `freeze` and similar renderers)")
+	printVersion := fs.Bool("version", false, "Print the version and exit")
+	_ = fs.Parse(args) // ExitOnError: never returns an error
 	if *printVersion {
-		fmt.Println(version)
-		return
+		_, _ = fmt.Fprintln(stdout, version)
+		return cfg, true, nil
 	}
 	cfg.DisableRequestJournal = !*requestJournal
 
-	var err error
 	for _, f := range limitFlags {
 		if *f.value == "" {
 			continue
 		}
 		if *f.dst, err = mock.ParseRateLimit(*f.value); err != nil {
-			log.Fatalf("telegym-mock: invalid -%s: %v", f.name, err)
+			return cfg, false, fmt.Errorf("invalid -%s: %w", f.name, err)
 		}
 	}
 	if cfg.LatencyMin, cfg.LatencyMax, err = parseLatency(*latency); err != nil {
-		log.Fatalf("telegym-mock: invalid -latency %q: %v", *latency, err)
+		return cfg, false, fmt.Errorf("invalid -latency %q: %w", *latency, err)
 	}
 	if cfg.FaultRate, err = strconv.ParseFloat(*faultRate, 64); err != nil || cfg.FaultRate < 0 || cfg.FaultRate > 1 {
-		log.Fatalf("telegym-mock: invalid -fault-rate %q: want a number from 0 to 1", *faultRate)
+		return cfg, false, fmt.Errorf("invalid -fault-rate %q: want a number from 0 to 1", *faultRate)
 	}
 
 	if bannerOnly {
@@ -147,12 +163,8 @@ func main() {
 		// `freeze` can render the ANSI escapes into SVG/PNG. We
 		// bypass mock.PrintBanner because that one strips colors
 		// when stdout is a pipe.
-		_, _ = io.WriteString(os.Stdout, mock.Banner)
-		return
+		_, _ = io.WriteString(stdout, mock.Banner)
+		return cfg, true, nil
 	}
-
-	srv := mock.New(cfg)
-	if err := srv.Run(); err != nil {
-		log.Fatalf("telegym-mock: %v", err)
-	}
+	return cfg, false, nil
 }
