@@ -1,4 +1,4 @@
-.PHONY: help init build build-examples run test lint check-deps preflight clean \
+.PHONY: help init build build-examples run test cover lint check-deps preflight clean \
         refresh-spec refresh-web-deps demo \
         mock-up mock-down \
         proxy-up proxy-down \
@@ -58,6 +58,10 @@ run: build ## Run mock server locally (foreground)
 test: ## Run unit tests (both root module and pkg/xk6)
 	go test -v ./...
 	cd pkg/xk6 && go test -v ./...
+
+cover: ## Total coverage of both modules (examples excluded) into coverage.out
+	go test -coverprofile=coverage.out $$(go list ./... ./pkg/xk6/... | grep -v /examples/)
+	@go tool cover -func=coverage.out | tail -1
 
 check-deps: ## Check module tidiness and workspace checksums
 	go mod tidy -diff
