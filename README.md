@@ -1,6 +1,7 @@
 # telegym · load testing for telegram bots (mock + proxy + k6)
 
 [![CI](https://github.com/kolomiichenko/telegym/actions/workflows/ci.yml/badge.svg)](https://github.com/kolomiichenko/telegym/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkolomiichenko%2Ftelegym%2Fbadges%2Fcoverage.json)](https://github.com/kolomiichenko/telegym/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/kolomiichenko/telegym.svg)](https://pkg.go.dev/github.com/kolomiichenko/telegym)
 [![Go Version](https://img.shields.io/github/go-mod/go-version/kolomiichenko/telegym?logo=go)](https://github.com/kolomiichenko/telegym/blob/main/go.mod)
 [![Supported Bot API](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fkolomiichenko%2Ftelegym%2Fmain%2Fpkg%2Fmock%2Fspec%2Fapi.json&query=%24.version&label=Supported%20Bot%20API&color=29a1d4&logo=telegram)](https://core.telegram.org/bots/api)
