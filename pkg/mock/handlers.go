@@ -229,7 +229,13 @@ func (h *Handlers) GetUpdates(c *gin.Context, bot *botEntry) {
 }
 
 func (h *Handlers) GetMe(c *gin.Context, bot *botEntry) {
-	c.JSON(http.StatusOK, APIResponse{OK: true, Result: bot.identity})
+	c.JSON(http.StatusOK, APIResponse{OK: true, Result: BotFullInfo{
+		ID:            bot.identity.ID,
+		IsBot:         true,
+		FirstName:     bot.identity.FirstName,
+		Username:      bot.identity.Username,
+		CanJoinGroups: true,
+	}})
 }
 
 func (h *Handlers) SendMessage(c *gin.Context, bot *botEntry) {

@@ -208,3 +208,29 @@ func TestMaskToken(t *testing.T) {
 		}
 	}
 }
+
+func TestGetMeReturnsBotFullInfo(t *testing.T) {
+	srv := New(Config{Quiet: true})
+	code, resp := callBot(t, srv, "getMe", `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("getMe: HTTP %d", code)
+	}
+	info, _ := resp.Result.(map[string]any)
+	if info["id"] != float64(903) || info["is_bot"] != true || info["username"] != "telegym_mock_bot" {
+		t.Fatalf("getMe = %v", info)
+	}
+	// Every required BotFullInfo field is present, even when false.
+	spec := MustLoadAPISpec()
+	for _, f := range spec.Types["BotFullInfo"].Fields {
+		if _, ok := info[f.Name]; f.Required && !ok {
+			t.Errorf("getMe lacks required field %s", f.Name)
+		}
+	}
+
+	// Since Bot API 10.5 the capability flags live only in BotFullInfo.
+	_, resp = callBot(t, srv, "sendMessage", `{"chat_id":1,"text":"hi"}`)
+	from, _ := resp.Result.(map[string]any)["from"].(map[string]any)
+	if from == nil || from["can_join_groups"] != nil {
+		t.Fatalf("message from = %v", from)
+	}
+}
