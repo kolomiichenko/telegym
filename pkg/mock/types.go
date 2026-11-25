@@ -21,15 +21,33 @@ type ResponseParameters struct {
 }
 
 type User struct {
-	ID                      int64  `json:"id"`
-	IsBot                   bool   `json:"is_bot"`
-	FirstName               string `json:"first_name"`
-	LastName                string `json:"last_name,omitempty"`
-	Username                string `json:"username,omitempty"`
-	LanguageCode            string `json:"language_code,omitempty"`
-	CanJoinGroups           bool   `json:"can_join_groups,omitempty"`
-	CanReadAllGroupMessages bool   `json:"can_read_all_group_messages,omitempty"`
-	SupportsInlineQueries   bool   `json:"supports_inline_queries,omitempty"`
+	ID           int64  `json:"id"`
+	IsBot        bool   `json:"is_bot"`
+	FirstName    string `json:"first_name"`
+	LastName     string `json:"last_name,omitempty"`
+	Username     string `json:"username,omitempty"`
+	LanguageCode string `json:"language_code,omitempty"`
+}
+
+// BotFullInfo is what getMe returns since Bot API 10.5. The capability flags
+// are required fields, so they are always serialized.
+type BotFullInfo struct {
+	ID                         int64  `json:"id"`
+	IsBot                      bool   `json:"is_bot"`
+	FirstName                  string `json:"first_name"`
+	Username                   string `json:"username,omitempty"`
+	CanJoinGroups              bool   `json:"can_join_groups"`
+	CanReadAllGroupMessages    bool   `json:"can_read_all_group_messages"`
+	SupportsGuestQueries       bool   `json:"supports_guest_queries"`
+	SupportsInlineQueries      bool   `json:"supports_inline_queries"`
+	NeedsInlineQueryLocation   bool   `json:"needs_inline_query_location"`
+	CanConnectToBusiness       bool   `json:"can_connect_to_business"`
+	HasMainWebApp              bool   `json:"has_main_web_app"`
+	HasTopicsEnabled           bool   `json:"has_topics_enabled"`
+	AllowsUsersToCreateTopics  bool   `json:"allows_users_to_create_topics"`
+	HasTopicSidebar            bool   `json:"has_topic_sidebar"`
+	CanManageBots              bool   `json:"can_manage_bots"`
+	SupportsJoinRequestQueries bool   `json:"supports_join_request_queries"`
 }
 
 type Chat struct {

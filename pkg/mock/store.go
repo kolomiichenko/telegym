@@ -250,13 +250,10 @@ func identityFromToken(token string) User {
 		id = 1
 	}
 	return User{
-		ID:                      id,
-		IsBot:                   true,
-		FirstName:               "telegym mock bot",
-		Username:                "telegym_mock_bot",
-		CanJoinGroups:           true,
-		CanReadAllGroupMessages: false,
-		SupportsInlineQueries:   false,
+		ID:        id,
+		IsBot:     true,
+		FirstName: "telegym mock bot",
+		Username:  "telegym_mock_bot",
 	}
 }
 
